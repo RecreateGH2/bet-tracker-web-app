@@ -1,0 +1,37 @@
+# Python
+venv/
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.mypy_cache/
+
+# Node / Vite
+node_modules/
+frontend/dist/
+frontend/.vite/
+
+# Database & scraped data (do not commit)
+data/bets.db
+data/bets.db-journal
+data/bets.db-wal
+data/bets.db-shm
+backend/data/sources.json
+
+# Local debug scripts + iOS sub-project (not part of web deploy)
+debug_*.py
+ios-app/
+
+# Environment / secrets
+.env
+.env.local
+*.pem
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Claude / Cursor metadata
+.claude/
