@@ -38,7 +38,7 @@ Playwright image, so there's nothing to install on the host except Docker.
 # On a fresh VM (Ubuntu 22.04+):
 curl -fsSL https://get.docker.com | sh
 
-git clone https://github.com/felix123recreate/bet-tracker-web-app.git
+git clone https://github.com/RecreateGH2/bet-tracker-web-app.git
 cd bet-tracker-web-app
 docker compose up -d --build
 ```
@@ -62,7 +62,7 @@ docker compose up -d --build
 
 ### Frontend → Vercel
 
-1. **Import** `felix123recreate/bet-tracker-web-app` in the Vercel dashboard.
+1. **Import** `RecreateGH2/bet-tracker-web-app` in the Vercel dashboard.
 2. **Root directory**: `frontend`.
 3. **Build settings** are picked up from `frontend/vercel.json` automatically
    (Vite framework, `npm run build`, `dist` output).
