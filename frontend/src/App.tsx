@@ -83,18 +83,29 @@ export default function App() {
     }
   }, [messages])
 
-  // Pick up race_start_time from snapshots
+  // Pick up race_start_time from snapshots — only for the race currently viewed
   useEffect(() => {
-    const last = messages.at(-1)
-    if (last?.type === 'snapshot' && last.race_start_time) {
-      setRaceStartTime(last.race_start_time)
+    if (activeRace === null) { setRaceStartTime(null); return }
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const m = messages[i]
+      if (m.type === 'snapshot' && m.race_no === activeRace && m.race_start_time) {
+        setRaceStartTime(m.race_start_time)
+        return
+      }
     }
-  }, [messages])
+  }, [messages, activeRace])
 
-  // Accumulate high-amount bets (>= 500K) across all snapshots, deduplicated
+  // Reset accumulated high-amount bets when switching race
+  useEffect(() => {
+    setHighBets([])
+    seenKeys.current = new Set()
+  }, [activeRace])
+
+  // Accumulate high-amount bets (>= 500K) for the active race only
   useEffect(() => {
     const last = messages.at(-1)
     if (last?.type !== 'snapshot' || !last.entries) return
+    if (last.race_no !== activeRace) return   // ignore snapshots for other races
     const newBig: BetEntry[] = []
     for (const entry of last.entries) {
       if (entry.amount < HIGH_BET_THRESHOLD) continue
@@ -107,7 +118,7 @@ export default function App() {
     if (newBig.length > 0) {
       setHighBets(prev => [...newBig, ...prev])
     }
-  }, [messages])
+  }, [messages, activeRace])
 
   const toggleHorse = (h: string) => {
     setVisibleHorses(prev => {
