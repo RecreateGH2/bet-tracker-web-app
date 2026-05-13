@@ -19,15 +19,37 @@ export interface HorseAggregate {
   pct_change: number
 }
 
+export type RaceStatus = 'unknown' | 'pending' | 'pre' | 'active' | 'ended'
+
 export interface WSMessage {
-  type: 'snapshot' | 'status' | 'error' | 'race_changed'
+  type: 'snapshot' | 'status' | 'error' | 'race_changed' | 'race_ended'
   race_no: number | null
   scraped_at: string | null
   snapshot_id: number | null
   entry_count: number | null
   message: string | null
   race_start_time: string | null
+  race_status?: RaceStatus
   entries: BetEntry[]
+  aggregates: HorseAggregate[]
+}
+
+export interface TrackedRace {
+  race_no: number
+  start_time: string | null
+  last_scrape_at: string | null
+  status: RaceStatus
+  ended_at: string | null
+  manual_extend_until: string | null
+  last_entry_count: number
+}
+
+export interface ArchivedRace {
+  race_no: number
+  start_time: string | null
+  ended_at: string | null
+  last_entry_count: number
+  total_db_entries: number
   aggregates: HorseAggregate[]
 }
 

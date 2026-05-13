@@ -122,8 +122,7 @@ async def scrape_race_card_ma288(race_no: int) -> list[dict]:
            col 0 = 马号, col 1 = 马名, col 3 = 烙号,
            col 5 = 练马师, col 6 = 骑师, col 10 = 6次近绩
     """
-    browser = await _get_browser()
-    page = await browser.new_page()
+    page = await _base_scraper.new_page()
     try:
         # Step 1: today's race 1 page
         await page.goto(_race_card_url(), wait_until="domcontentloaded", timeout=30_000)

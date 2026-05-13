@@ -8,7 +8,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..database import get_db
 from ..models import Race, Snapshot, BetEntry
 from ..schemas import ActiveRaceIn, ActiveRaceOut, SnapshotOut
-from ..scheduler import get_active_race, set_active_race
+from ..scheduler import (
+    get_active_race, set_active_race,
+    add_tracked, remove_tracked, get_tracked_states,
+    extend_tracking, get_archive,
+)
 from ..websocket_manager import manager
 from .. import horse_cache
 from ..horse_scraper import scrape_all_horses
@@ -118,3 +122,51 @@ async def refresh_horse_info(race_no: int):
     horse_cache.clear_race(race_no)
     asyncio.create_task(_background_scrape_horses(race_no))
     return {"status": "loading"}
+
+
+# ── Multi-race tracking ────────────────────────────────────────────────────
+
+@router.get("/tracked")
+async def list_tracked():
+    """Returns per-race state for everything currently being tracked."""
+    return {"races": get_tracked_states()}
+
+
+@router.post("/tracked/{race_no}")
+async def start_tracking(race_no: int):
+    if race_no < 1 or race_no > 20:
+        raise HTTPException(status_code=400, detail="race_no must be 1-20")
+    add_tracked(race_no)
+    return {"status": "tracked", "race_no": race_no}
+
+
+@router.delete("/tracked/{race_no}")
+async def stop_tracking(race_no: int):
+    remove_tracked(race_no)
+    return {"status": "removed", "race_no": race_no}
+
+
+@router.post("/tracked/{race_no}/extend")
+async def extend_tracking_endpoint(race_no: int, minutes: int = 10):
+    """`Continue tracking` button — keep race active for N more minutes."""
+    ok = extend_tracking(race_no, minutes=minutes)
+    if not ok:
+        raise HTTPException(status_code=404, detail=f"Race {race_no} is not tracked")
+    return {"status": "extended", "race_no": race_no, "minutes": minutes}
+
+
+# ── Archive (finished races) ───────────────────────────────────────────────
+
+@router.get("/archive")
+async def list_archive():
+    """Returns final aggregates for every race that has ended."""
+    arc = get_archive()
+    return {"races": [arc[k] for k in sorted(arc.keys())]}
+
+
+@router.get("/archive/{race_no}")
+async def get_archive_entry(race_no: int):
+    entry = get_archive().get(race_no)
+    if entry is None:
+        raise HTTPException(status_code=404, detail=f"Race {race_no} not in archive")
+    return entry

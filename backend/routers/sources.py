@@ -43,8 +43,8 @@ async def reload_source(key: str, race_no: Optional[int] = None):
           clears horse cache for race_no and re-scrapes
     """
     if key == "live_bets":
-        from ..scheduler import scrape_and_broadcast
-        asyncio.create_task(scrape_and_broadcast())
+        from ..scheduler import scrape_now_all
+        asyncio.create_task(scrape_now_all())
         return {"status": "scrape triggered"}
 
     if key in ("race_card", "horse_profile", "horse_profile_fallback"):
@@ -54,17 +54,40 @@ async def reload_source(key: str, race_no: Optional[int] = None):
             return {"status": "already loading"}
         clear_race(race_no)
         from ..horse_scraper import scrape_all_horses
+        from ..horse_cache import set_horse_info
 
         async def _bg():
             start_loading(race_no)
             try:
                 horses = await scrape_all_horses(race_no)
-                finish_loading(race_no, horses)
+                set_horse_info(race_no, horses)
             except Exception as e:
                 log.error("reload %s race %s error: %s", key, race_no, e)
-                finish_loading(race_no, [])
+                finish_loading(race_no)
 
         asyncio.create_task(_bg())
+        return {"status": "reload started"}
+
+    # Meeting-wide sources — invalidate the trainer-grid cache and re-scrape.
+    if key in ("win_odds", "race_result"):
+        from .. import meeting_cache
+        from ..meeting_scraper import scrape_trainer_grid
+
+        meeting_cache.clear()
+
+        async def _bg_meeting():
+            meeting_cache.start_loading()
+            try:
+                data = await scrape_trainer_grid()
+                if data is not None:
+                    meeting_cache.set(data)
+                else:
+                    meeting_cache.finish_loading()
+            except Exception as e:
+                log.error("reload %s error: %s", key, e)
+                meeting_cache.finish_loading()
+
+        asyncio.create_task(_bg_meeting())
         return {"status": "reload started"}
 
     raise HTTPException(status_code=404, detail=f"Unknown source key: {key!r}")

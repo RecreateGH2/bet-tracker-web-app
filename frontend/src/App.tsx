@@ -3,7 +3,8 @@ import { useWebSocket } from './hooks/useWebSocket'
 import { useRaceData } from './hooks/useRaceData'
 import { BetEntry } from './types'
 import StatusBar from './components/StatusBar'
-import RaceSelector from './components/RaceSelector'
+import RaceButtons from './components/RaceButtons'
+import ArchivePage from './components/ArchivePage'
 import BetTable from './components/BetTable'
 import TrendChart from './components/TrendChart'
 import BetAmountChart from './components/BetAmountChart'
@@ -19,9 +20,10 @@ const HIGH_BET_THRESHOLD = 500_000
 
 export default function App() {
   const { status, messages, latestSnapshot } = useWebSocket()
-  const { aggregates, horseSeries, comboSeries, allHorseNumbers, comboAggregates, snapshotCount, snapshotInterval } = useRaceData(messages)
   const [activeRace, setActiveRace] = useState<number | null>(null)
+  const { aggregates, horseSeries, comboSeries, allHorseNumbers, comboAggregates, snapshotCount, snapshotInterval } = useRaceData(messages, activeRace)
   const [showSources, setShowSources] = useState(false)
+  const [showArchive, setShowArchive] = useState(false)
   const [visibleHorses, setVisibleHorses] = useState<Set<string>>(new Set())
   const [highBets, setHighBets] = useState<BetEntry[]>([])
   const seenKeys = useRef<Set<string>>(new Set())
@@ -122,26 +124,40 @@ export default function App() {
         <h1 style={{ fontSize: 20, fontWeight: 700, color: '#f1f5f9' }}>
           大票房 Bet Tracker
         </h1>
-        {!showSources && <RaceSelector activeRace={activeRace} onSelect={setActiveRace} />}
-        <button
-          onClick={() => setShowSources(p => !p)}
-          title={showSources ? 'Back to dashboard' : 'Data sources'}
-          style={{
-            marginLeft: 'auto',
-            background: showSources ? '#1d4ed8' : 'rgba(255,255,255,0.08)',
-            border: 'none',
-            borderRadius: 8,
-            padding: '6px 12px',
-            color: '#e2e8f0',
-            fontSize: 13,
-            cursor: 'pointer',
-            display: 'flex',
-            alignItems: 'center',
-            gap: 6,
-          }}
-        >
-          {showSources ? '← Dashboard' : '⚙ Sources'}
-        </button>
+        {!showSources && !showArchive && (
+          <RaceButtons activeRace={activeRace} onSelect={(rn) => {
+            setActiveRace(rn)
+            fetch(apiUrl('/api/races/active'), {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ race_no: rn }),
+            }).catch(() => {})
+          }} />
+        )}
+        <span style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
+          <button
+            onClick={() => { setShowArchive(p => !p); setShowSources(false) }}
+            title={showArchive ? 'Back to dashboard' : 'Final results archive'}
+            style={{
+              background: showArchive ? '#1d4ed8' : 'rgba(255,255,255,0.08)',
+              border: 'none', borderRadius: 8, padding: '6px 12px',
+              color: '#e2e8f0', fontSize: 13, cursor: 'pointer',
+            }}
+          >
+            {showArchive ? '← Dashboard' : '🏁 Archive'}
+          </button>
+          <button
+            onClick={() => { setShowSources(p => !p); setShowArchive(false) }}
+            title={showSources ? 'Back to dashboard' : 'Data sources'}
+            style={{
+              background: showSources ? '#1d4ed8' : 'rgba(255,255,255,0.08)',
+              border: 'none', borderRadius: 8, padding: '6px 12px',
+              color: '#e2e8f0', fontSize: 13, cursor: 'pointer',
+            }}
+          >
+            {showSources ? '← Dashboard' : '⚙ Sources'}
+          </button>
+        </span>
       </header>
 
       <StatusBar
@@ -159,7 +175,13 @@ export default function App() {
         </div>
       )}
 
-      <main style={{ flex: 1, padding: '16px 20px', display: showSources ? 'none' : 'flex', flexDirection: 'column', gap: 20 }}>
+      {showArchive && (
+        <div style={{ flex: 1, background: '#0f172a', minHeight: '100vh' }}>
+          <ArchivePage />
+        </div>
+      )}
+
+      <main style={{ flex: 1, padding: '16px 20px', display: (showSources || showArchive) ? 'none' : 'flex', flexDirection: 'column', gap: 20 }}>
         {/* Horse filter toggles */}
         {allHorseNumbers.length > 0 && (
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>

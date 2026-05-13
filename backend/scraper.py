@@ -19,6 +19,7 @@ from typing import Optional, Tuple, List
 from urllib.parse import urlparse, urlencode, parse_qsl, urlunparse
 
 from playwright.async_api import async_playwright, Page, TimeoutError as PWTimeout
+from playwright_stealth import Stealth
 
 from .config import settings
 from . import source_config as _src_cfg
@@ -63,29 +64,50 @@ class ScrapeResult:
     start_time: Optional[datetime]  # 開跑時間
 
 
-# Shared browser instance (created once, reused across scrapes)
+# Shared browser + context (created once, reused across scrapes).
+# Wrapped with playwright-stealth so Cloudflare's managed challenge on
+# ma288.com lets us through.
 _browser = None
 _playwright = None
+_pw_cm = None
+_context = None
 
 
 async def start_browser():
-    global _browser, _playwright
+    global _browser, _playwright, _pw_cm, _context
     if _browser is None:
-        _playwright = await async_playwright().start()
+        # Stealth wraps the playwright instance with anti-detection patches
+        _pw_cm = Stealth().use_async(async_playwright())
+        _playwright = await _pw_cm.__aenter__()
         _browser = await _playwright.chromium.launch(
             headless=True,
             args=["--no-sandbox", "--disable-dev-shm-usage"],
         )
-        log.info("Playwright browser started")
+        _context = await _browser.new_context(
+            viewport={"width": 1280, "height": 800},
+            locale="zh-HK",
+        )
+        log.info("Playwright browser started (stealth)")
+
+
+async def new_page():
+    """Open a page in the shared context (with realistic UA)."""
+    if _context is None:
+        await start_browser()
+    return await _context.new_page()
 
 
 async def stop_browser():
-    global _browser, _playwright
+    global _browser, _playwright, _pw_cm, _context
+    if _context:
+        await _context.close()
+        _context = None
     if _browser:
         await _browser.close()
         _browser = None
-    if _playwright:
-        await _playwright.stop()
+    if _pw_cm:
+        await _pw_cm.__aexit__(None, None, None)
+        _pw_cm = None
         _playwright = None
     log.info("Playwright browser stopped")
 
@@ -104,7 +126,7 @@ async def _do_scrape(race_no: int) -> ScrapeResult:
     if _browser is None:
         await start_browser()
 
-    page = await _browser.new_page()
+    page = await new_page()
     try:
         url = _build_url(_page_url(), race_no)
         log.debug(f"Navigating to {url}")

@@ -1,10 +1,12 @@
 import { useMemo } from 'react'
 import { WSMessage, HorseAggregate, TimePoint, ComboAggregate } from '../types'
 
-export function useRaceData(messages: WSMessage[]) {
+export function useRaceData(messages: WSMessage[], raceNo: number | null = null) {
   const snapshots = useMemo(
-    () => messages.filter(m => m.type === 'snapshot'),
-    [messages]
+    () => messages.filter(m =>
+      m.type === 'snapshot' && (raceNo === null || m.race_no === raceNo)
+    ),
+    [messages, raceNo]
   )
 
   // Latest aggregates (from the most recent snapshot)

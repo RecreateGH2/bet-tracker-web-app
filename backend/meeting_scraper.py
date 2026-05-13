@@ -109,12 +109,12 @@ async def scrape_meeting_horses() -> Optional[MeetingSummary]:
     Visit ma288 race card root, then iterate every race. Returns the meeting
     summary with horses (no favourite, no result yet — those are layered on later).
     """
-    browser = await _get_browser()
-    page = await browser.new_page()
+    page = await _base_scraper.new_page()
     try:
         root = _src_cfg.get_url("race_card")
         await page.goto(root, wait_until="domcontentloaded", timeout=30_000)
-        await page.wait_for_timeout(1200)
+        # ma288 sits behind Cloudflare bot challenge — needs ~2-3s to clear
+        await page.wait_for_timeout(3500)
 
         meta = await page.evaluate(r"""() => {
             // Meeting date + venue from page header text
@@ -164,10 +164,11 @@ async def scrape_meeting_horses() -> Optional[MeetingSummary]:
     # Fetch each race in parallel (with semaphore limit)
     async def fetch_race(race_no: int, href: str) -> Optional[MeetingRace]:
         async with _SEM:
-            p2 = await browser.new_page()
+            p2 = await _base_scraper.new_page()
             try:
                 await p2.goto(href, wait_until="domcontentloaded", timeout=30_000)
-                await p2.wait_for_timeout(700)
+                # ma288 per-race page also passes through Cloudflare challenge
+                await p2.wait_for_timeout(3500)
                 rows = await p2.evaluate("""() => {
                     const out = [];
                     const t = document.querySelector('table.raceCardTable');

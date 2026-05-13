@@ -1,15 +1,31 @@
 """
-Background scheduler: scrapes the active race every N seconds,
-persists to DB, and broadcasts to all WebSocket clients.
+Multi-race scheduler.
+
+We track a set of races (persisted to data/tracked_races.json) and run a
+single asyncio loop that decides, for each race, whether it's due for a
+scrape based on its phase:
+
+  • unknown                                → poll every 60s until start_time learned
+  • pending  (>20 min until start)         → poll every 5 min (keep-alive)
+  • pre      (20 → 2 min until start)      → poll every 30s
+  • active   (2 min before → 5 min after)  → poll every 5s
+  • ended    (>5 min after start)          → STOP scraping; archive final aggregates
+
+"Continue tracking" manual override: sets manual_extend_until = now + 10 min.
+While in effect the race stays in `active` regardless of clock — and if the
+race was archived, the archive entry is removed so it can be re-archived
+when the extension ends.
 """
 
+import asyncio
 import hashlib
 import json
 import logging
-from datetime import datetime, timezone
-from typing import Optional, List, Dict
+from dataclasses import dataclass
+from datetime import datetime, timezone, timedelta
+from pathlib import Path
+from typing import Optional, List, Dict, Tuple
 
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from sqlalchemy import select
 
 from .config import settings
@@ -20,76 +36,232 @@ from .websocket_manager import manager
 
 log = logging.getLogger(__name__)
 
-scheduler = AsyncIOScheduler()
+# ── Tunables ────────────────────────────────────────────────────────────────
+_INTERVAL_UNKNOWN = 60
+_INTERVAL_PENDING = 300
+_INTERVAL_PRE = 30
+_INTERVAL_ACTIVE = 5
+_MAX_CONCURRENT_SCRAPES = 2
 
-# Mutable state: which race we're currently tracking
-_state = {"active_race_no": None, "last_payload": None, "race_start_time": None}
+_PHASE_PRE_SECONDS = 20 * 60
+_PHASE_ACTIVE_PRE_SECONDS = 2 * 60
+_PHASE_END_SECONDS = 5 * 60
+_MANUAL_EXTEND_SECONDS = 10 * 60
 
-HIGH_FREQ_SECONDS = 5       # poll interval near race start
-HIGH_FREQ_WINDOW = 90       # seconds before/after start_time to use high freq
+_TRACKED_FILE = Path("data/tracked_races.json")
+_ARCHIVE_FILE = Path("data/race_archive.json")
 
 
+@dataclass
+class RaceState:
+    race_no: int
+    start_time: Optional[datetime] = None
+    last_scrape_at: Optional[datetime] = None
+    status: str = "unknown"        # unknown / pending / pre / active / ended
+    ended_at: Optional[datetime] = None
+    manual_extend_until: Optional[datetime] = None
+    last_entry_count: int = 0
+
+
+_tracked: Dict[int, RaceState] = {}
+_archive: Dict[int, dict] = {}
+_loop_task: Optional[asyncio.Task] = None
+_running = False
+
+
+# ── Persistence ─────────────────────────────────────────────────────────────
+def _to_iso(dt: Optional[datetime]) -> Optional[str]:
+    return dt.isoformat() if dt else None
+
+def _from_iso(s: Optional[str]) -> Optional[datetime]:
+    if not s:
+        return None
+    try:
+        return datetime.fromisoformat(s)
+    except Exception:
+        return None
+
+
+def _save_tracked() -> None:
+    try:
+        _TRACKED_FILE.parent.mkdir(parents=True, exist_ok=True)
+        _TRACKED_FILE.write_text(json.dumps({
+            rn: {
+                "start_time": _to_iso(s.start_time),
+                "status": s.status,
+                "ended_at": _to_iso(s.ended_at),
+                "manual_extend_until": _to_iso(s.manual_extend_until),
+                "last_entry_count": s.last_entry_count,
+            }
+            for rn, s in _tracked.items()
+        }, indent=2))
+    except Exception as e:
+        log.warning(f"_save_tracked failed: {e}")
+
+
+def _load_tracked() -> None:
+    if not _TRACKED_FILE.exists():
+        return
+    try:
+        data = json.loads(_TRACKED_FILE.read_text())
+        for rn_str, entry in data.items():
+            rn = int(rn_str)
+            _tracked[rn] = RaceState(
+                race_no=rn,
+                start_time=_from_iso(entry.get("start_time")),
+                status=entry.get("status", "unknown"),
+                ended_at=_from_iso(entry.get("ended_at")),
+                manual_extend_until=_from_iso(entry.get("manual_extend_until")),
+                last_entry_count=int(entry.get("last_entry_count") or 0),
+            )
+        log.info(f"Loaded {len(_tracked)} tracked races")
+    except Exception as e:
+        log.warning(f"_load_tracked failed: {e}")
+
+
+def _save_archive() -> None:
+    try:
+        _ARCHIVE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        _ARCHIVE_FILE.write_text(json.dumps(_archive, indent=2, default=str))
+    except Exception as e:
+        log.warning(f"_save_archive failed: {e}")
+
+
+def _load_archive() -> None:
+    if not _ARCHIVE_FILE.exists():
+        return
+    try:
+        data = json.loads(_ARCHIVE_FILE.read_text())
+        _archive.update({int(k): v for k, v in data.items()})
+        log.info(f"Loaded {len(_archive)} archived races")
+    except Exception as e:
+        log.warning(f"_load_archive failed: {e}")
+
+
+# ── Public state API ────────────────────────────────────────────────────────
+def add_tracked(race_no: int) -> None:
+    if race_no in _tracked:
+        return
+    _tracked[race_no] = RaceState(race_no=race_no)
+    _save_tracked()
+    log.info(f"Tracking race {race_no}")
+
+
+def remove_tracked(race_no: int) -> None:
+    if race_no in _tracked:
+        del _tracked[race_no]
+        _save_tracked()
+
+
+def _state_to_dict(s: RaceState) -> dict:
+    return {
+        "race_no": s.race_no,
+        "start_time": _to_iso(s.start_time),
+        "last_scrape_at": _to_iso(s.last_scrape_at),
+        "status": s.status,
+        "ended_at": _to_iso(s.ended_at),
+        "manual_extend_until": _to_iso(s.manual_extend_until),
+        "last_entry_count": s.last_entry_count,
+    }
+
+
+def get_tracked_states() -> List[dict]:
+    return [_state_to_dict(s) for s in sorted(_tracked.values(), key=lambda x: x.race_no)]
+
+
+def get_archive() -> Dict[int, dict]:
+    return dict(_archive)
+
+
+def extend_tracking(race_no: int, minutes: int = 10) -> bool:
+    """User-triggered "continue tracking" — keep race active for N more minutes."""
+    s = _tracked.get(race_no)
+    if s is None:
+        return False
+    s.manual_extend_until = datetime.now(timezone.utc) + timedelta(minutes=minutes)
+    if s.status == "ended":
+        s.status = "active"
+        s.ended_at = None
+        _archive.pop(race_no, None)
+        _save_archive()
+    _save_tracked()
+    log.info(f"Race {race_no}: extended tracking until {s.manual_extend_until}")
+    return True
+
+
+# ── Backward-compat shims used by other routers ─────────────────────────────
 def get_active_race() -> Optional[int]:
-    return _state["active_race_no"]
+    """Legacy: returns the lowest tracked race_no, used as a single-race hint."""
+    if not _tracked:
+        return None
+    return min(_tracked.keys())
+
+
+def set_active_race(race_no: Optional[int]) -> None:
+    """Legacy: adding to tracked set."""
+    if race_no is not None:
+        add_tracked(race_no)
 
 
 def get_last_payload() -> Optional[dict]:
-    return _state["last_payload"]
+    return None  # no longer cached globally — per-race state lives in _tracked
 
 
-def set_active_race(race_no: Optional[int]):
-    _state["active_race_no"] = race_no
-    log.info(f"Active race set to: {race_no}")
+# ── Phase / interval logic ──────────────────────────────────────────────────
+def _phase_and_interval(state: RaceState, now: datetime) -> Tuple[str, Optional[int]]:
+    """Returns (status, interval_seconds). interval=None means "do not scrape"."""
+    if state.manual_extend_until and now < state.manual_extend_until:
+        return ("active", _INTERVAL_ACTIVE)
+    if state.start_time is None:
+        return ("unknown", _INTERVAL_UNKNOWN)
+    st = state.start_time
+    if st.tzinfo is None:
+        st = st.replace(tzinfo=timezone.utc)
+    delta = (st - now).total_seconds()
+    if delta > _PHASE_PRE_SECONDS:
+        return ("pending", _INTERVAL_PENDING)
+    if delta > _PHASE_ACTIVE_PRE_SECONDS:
+        return ("pre", _INTERVAL_PRE)
+    if delta > -_PHASE_END_SECONDS:
+        return ("active", _INTERVAL_ACTIVE)
+    return ("ended", None)
 
 
-def _compute_next_interval() -> int:
-    start_time = _state["race_start_time"]
-    if start_time is None:
-        return settings.scrape_interval_seconds
-    now = datetime.now(timezone.utc)
-    # Ensure start_time is tz-aware
-    if start_time.tzinfo is None:
-        start_time = start_time.replace(tzinfo=timezone.utc)
-    seconds_delta = abs((start_time - now).total_seconds())
-    if seconds_delta <= HIGH_FREQ_WINDOW:
-        return HIGH_FREQ_SECONDS
-    return settings.scrape_interval_seconds
-
-
-async def scrape_and_broadcast():
-    race_no = _state["active_race_no"]
-    if race_no is None:
+# ── Per-race scrape (mostly the old scrape_and_broadcast scoped to one race) ─
+async def _scrape_one_race(race_no: int) -> None:
+    state = _tracked.get(race_no)
+    if state is None:
+        return
+    state.last_scrape_at = datetime.now(timezone.utc)
+    try:
+        result = await scrape_race(race_no)
+    except Exception as e:
+        log.error(f"Race {race_no}: scrape error: {e}")
         return
 
-    result = await scrape_race(race_no)
+    if result.start_time is not None and state.start_time is None:
+        state.start_time = result.start_time
+        log.info(f"Race {race_no}: learned start_time {state.start_time}")
+
     entries = result.entries
-    if result.start_time is not None:
-        _state["race_start_time"] = result.start_time
-
     now = datetime.now(timezone.utc)
-
-    # Compute hash to detect duplicate data
     raw_hash = hashlib.sha256(
-        json.dumps([
-            (e.horse_number, e.bet_type, e.amount, e.is_parlay)
-            for e in entries
-        ], sort_keys=True).encode()
+        json.dumps(
+            [(e.horse_number, e.bet_type, e.amount, e.is_parlay) for e in entries],
+            sort_keys=True,
+        ).encode()
     ).hexdigest()
 
     async with AsyncSessionLocal() as db:
-        # Upsert the Race row
-        result = await db.execute(select(Race).where(Race.race_no == race_no))
-        race = result.scalar_one_or_none()
-        if race is None:
-            race = Race(race_no=race_no, created_at=now)
-            db.add(race)
+        res = await db.execute(select(Race).where(Race.race_no == race_no))
+        race_row = res.scalar_one_or_none()
+        if race_row is None:
+            race_row = Race(race_no=race_no, created_at=now)
+            db.add(race_row)
             await db.flush()
-
-        race.last_scraped_at = now
-
-        # Create snapshot
+        race_row.last_scraped_at = now
         snapshot = Snapshot(
-            race_id=race.id,
+            race_id=race_row.id,
             race_no=race_no,
             scraped_at=now,
             raw_html_hash=raw_hash,
@@ -97,10 +269,7 @@ async def scrape_and_broadcast():
         )
         db.add(snapshot)
         await db.flush()
-
-        # Persist entries
         for e in entries:
-            # For quinella bets, store the pair as "1-2" so the second horse isn't lost
             horse_num = f"{e.horse_number}-{e.horse_number_2}" if e.horse_number_2 else e.horse_number
             db.add(BetEntry(
                 snapshot_id=snapshot.id,
@@ -112,27 +281,22 @@ async def scrape_and_broadcast():
                 is_parlay=e.is_parlay,
                 scraped_at=e.snapshot_time or now,
             ))
-
         await db.commit()
 
-        # Build aggregates from all entries for this race today
-        result = await db.execute(
-            select(BetEntry).where(BetEntry.race_no == race_no)
-        )
-        all_entries = result.scalars().all()
+        res = await db.execute(select(BetEntry).where(BetEntry.race_no == race_no))
+        all_entries = res.scalars().all()
 
     aggregates = _compute_aggregates(all_entries)
+    state.last_entry_count = len(entries)
 
-    start_time = _state["race_start_time"]
-
-    # Build WebSocket payload
     payload = {
         "type": "snapshot",
         "race_no": race_no,
         "scraped_at": now.isoformat(),
         "snapshot_id": snapshot.id,
         "entry_count": len(entries),
-        "race_start_time": start_time.isoformat() if start_time else None,
+        "race_start_time": _to_iso(state.start_time),
+        "race_status": state.status,
         "entries": [
             {
                 "horse_number": f"{e.horse_number}-{e.horse_number_2}" if e.horse_number_2 else e.horse_number,
@@ -146,20 +310,74 @@ async def scrape_and_broadcast():
         ],
         "aggregates": aggregates,
     }
-
-    _state["last_payload"] = payload
     await manager.broadcast(payload)
 
-    # Dynamically adjust polling interval based on proximity to race start
-    next_interval = _compute_next_interval()
-    scheduler.reschedule_job("scrape_job", trigger="interval", seconds=next_interval)
-    log.debug(f"Broadcast race {race_no}: {len(entries)} entries, {len(aggregates)} horses — next poll in {next_interval}s")
+
+async def _archive_race(race_no: int) -> None:
+    """Snapshot the final aggregates of a race into _archive."""
+    async with AsyncSessionLocal() as db:
+        res = await db.execute(select(BetEntry).where(BetEntry.race_no == race_no))
+        all_entries = res.scalars().all()
+    aggregates = _compute_aggregates(all_entries)
+    state = _tracked.get(race_no)
+    _archive[race_no] = {
+        "race_no": race_no,
+        "start_time": _to_iso(state.start_time if state else None),
+        "ended_at": _to_iso(state.ended_at if state and state.ended_at else datetime.now(timezone.utc)),
+        "last_entry_count": state.last_entry_count if state else 0,
+        "total_db_entries": len(all_entries),
+        "aggregates": aggregates,
+    }
+    _save_archive()
+    log.info(f"Race {race_no}: archived ({len(aggregates)} horses, {len(all_entries)} entries)")
+    await manager.broadcast({"type": "race_ended", "race_no": race_no})
 
 
+# ── Main loop ───────────────────────────────────────────────────────────────
+async def _scrape_loop() -> None:
+    log.info("Scrape loop started")
+    sem = asyncio.Semaphore(_MAX_CONCURRENT_SCRAPES)
+
+    async def go(rn: int) -> None:
+        async with sem:
+            await _scrape_one_race(rn)
+
+    while _running:
+        try:
+            now = datetime.now(timezone.utc)
+            to_scrape: List[int] = []
+            for rn, state in list(_tracked.items()):
+                new_status, interval = _phase_and_interval(state, now)
+                if new_status != state.status:
+                    old = state.status
+                    state.status = new_status
+                    log.info(f"Race {rn}: {old} → {new_status}")
+                    if new_status == "ended":
+                        if state.ended_at is None:
+                            state.ended_at = now
+                        # archive in the background (DB read)
+                        asyncio.create_task(_archive_race(rn))
+                    _save_tracked()
+                if interval is None:
+                    continue
+                last = state.last_scrape_at
+                if last is None or (now - last).total_seconds() >= interval:
+                    to_scrape.append(rn)
+            if to_scrape:
+                await asyncio.gather(*[go(rn) for rn in to_scrape], return_exceptions=True)
+                _save_tracked()
+            await asyncio.sleep(1)
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            log.error(f"Scrape loop error: {e}")
+            await asyncio.sleep(5)
+    log.info("Scrape loop stopped")
+
+
+# ── Aggregates (unchanged) ──────────────────────────────────────────────────
 def _compute_aggregates(all_entries) -> List[Dict]:
-    """Compute per-horse aggregated totals from all stored entries."""
     horses: Dict[str, Dict] = {}
-
     for e in all_entries:
         key = e.horse_number
         if key not in horses:
@@ -185,25 +403,35 @@ def _compute_aggregates(all_entries) -> List[Dict]:
     result = []
     for h in sorted(horses.values(), key=lambda x: int(x["horse_number"]) if x["horse_number"].isdigit() else 99):
         h["win_share_pct"] = round(h["total_win_amount"] / total_win * 100, 2)
-        h["prev_win_share_pct"] = h["win_share_pct"]  # historical diff handled client-side
+        h["prev_win_share_pct"] = h["win_share_pct"]
         h["pct_change"] = 0.0
         result.append(h)
-
     return result
 
 
-def start_scheduler():
-    scheduler.add_job(
-        scrape_and_broadcast,
-        "interval",
-        seconds=settings.scrape_interval_seconds,
-        id="scrape_job",
-        replace_existing=True,
-    )
-    scheduler.start()
-    log.info(f"Scheduler started (interval: {settings.scrape_interval_seconds}s)")
+# ── Lifecycle ───────────────────────────────────────────────────────────────
+def start_scheduler() -> None:
+    global _running, _loop_task
+    _load_tracked()
+    _load_archive()
+    _running = True
+    _loop_task = asyncio.create_task(_scrape_loop())
+    log.info(f"Scheduler started ({len(_tracked)} tracked races resumed)")
 
 
-def stop_scheduler():
-    scheduler.shutdown(wait=False)
+def stop_scheduler() -> None:
+    global _running, _loop_task
+    _running = False
+    if _loop_task:
+        _loop_task.cancel()
     log.info("Scheduler stopped")
+
+
+# ── Used by /api/sources/live_bets/reload ───────────────────────────────────
+async def scrape_now_all() -> None:
+    """Force-scrape every tracked race once, ignoring the polling clock."""
+    sem = asyncio.Semaphore(_MAX_CONCURRENT_SCRAPES)
+    async def go(rn: int) -> None:
+        async with sem:
+            await _scrape_one_race(rn)
+    await asyncio.gather(*[go(rn) for rn in list(_tracked.keys())], return_exceptions=True)
