@@ -1,6 +1,6 @@
 # Microsoft's Playwright Python image: Chromium + system deps preinstalled.
 # Pinned to match playwright>=1.44 in requirements.txt.
-FROM mcr.microsoft.com/playwright/python:v1.50.0-jammy
+FROM mcr.microsoft.com/playwright/python:v1.59.0-jammy
 
 WORKDIR /app
 
