@@ -239,9 +239,10 @@ async def _scrape_one_race(race_no: int) -> None:
         log.error(f"Race {race_no}: scrape error: {e}")
         return
 
-    if result.start_time is not None and state.start_time is None:
+    if result.start_time is not None and result.start_time != state.start_time:
+        old = state.start_time
         state.start_time = result.start_time
-        log.info(f"Race {race_no}: learned start_time {state.start_time}")
+        log.info(f"Race {race_no}: start_time {old} → {state.start_time}")
 
     entries = result.entries
     now = datetime.now(timezone.utc)
