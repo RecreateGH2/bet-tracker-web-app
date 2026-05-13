@@ -383,3 +383,25 @@ async def scrape_all_horses(race_no: int) -> list[dict]:
     output.sort(key=lambda x: x.get("horse_no", 0))
     log.info(f"Race {race_no}: completed horse info scrape, {len(output)} entries")
     return output
+
+
+async def prefetch_all_races(race_nos: list[int]) -> None:
+    """
+    Pre-warm the in-memory horse-info cache for every race in the meeting.
+    Runs sequentially per race to keep the shared Playwright browser
+    available for live-bet scrapes in between.
+    """
+    from . import horse_cache
+    for rn in race_nos:
+        if horse_cache.get_horse_info(rn) is not None:
+            continue
+        if horse_cache.is_loading(rn):
+            continue
+        horse_cache.start_loading(rn)
+        try:
+            data = await scrape_all_horses(rn)
+            horse_cache.set_horse_info(rn, data)
+            log.info(f"Pre-fetched horse-info for race {rn}: {len(data)} entries")
+        except Exception as e:
+            log.error(f"Pre-fetch race {rn} failed: {e}")
+            horse_cache.finish_loading(rn)
