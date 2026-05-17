@@ -1,7 +1,7 @@
 import asyncio
 from datetime import datetime
 from typing import Optional
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy import select, desc
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -102,13 +102,15 @@ async def get_aggregates(race_no: int, db: AsyncSession = Depends(get_db)):
 
 
 @router.get("/{race_no}/horse-info")
-async def get_horse_info(race_no: int):
+async def get_horse_info(race_no: int, response: Response):
     """
     Return horse info table data for a race.
     Automatically triggers background scraping on first call.
     Response: {"status": "ready"|"loading", "horses": [...]}
     """
     cached = horse_cache.get_horse_info(race_no)
+    # Horse info changes rarely — cache aggressively at the browser + shared cache.
+    response.headers["Cache-Control"] = "public, max-age=60, s-maxage=120"
     if cached is not None:
         return {"status": "ready", "horses": cached}
     if not horse_cache.is_loading(race_no):

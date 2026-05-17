@@ -63,6 +63,28 @@ logging.basicConfig(
 )
 
 
+async def _daily_bootstrap_loop() -> None:
+    """Re-run bootstrap once a day at 10:00 HKT (catches new meetings)."""
+    from datetime import datetime, timezone, timedelta
+    HKT = timezone(timedelta(hours=8))
+    while True:
+        try:
+            now = datetime.now(HKT)
+            target = now.replace(hour=10, minute=0, second=0, microsecond=0)
+            if target <= now:
+                target = target + timedelta(days=1)
+            wait_seconds = (target - now).total_seconds()
+            log.info(f"Daily bootstrap scheduled in {wait_seconds/3600:.1f} hours")
+            await asyncio.sleep(wait_seconds)
+            log.info("Daily bootstrap firing")
+            await _bootstrap_meeting()
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            log.error(f"Daily bootstrap loop error: {e}")
+            await asyncio.sleep(3600)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     source_config.init()
@@ -71,8 +93,10 @@ async def lifespan(app: FastAPI):
     await start_browser()
     start_scheduler()
     bootstrap_task = asyncio.create_task(_bootstrap_meeting())
+    daily_task = asyncio.create_task(_daily_bootstrap_loop())
     yield
     bootstrap_task.cancel()
+    daily_task.cancel()
     stop_scheduler()
     await stop_browser()
 

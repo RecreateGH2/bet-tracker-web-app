@@ -2,7 +2,7 @@
 
 import asyncio
 import logging
-from fastapi import APIRouter
+from fastapi import APIRouter, Response
 
 from .. import meeting_cache
 from ..meeting_scraper import scrape_trainer_grid
@@ -26,12 +26,14 @@ async def _background_scrape() -> None:
 
 
 @router.get("/trainer-grid")
-async def get_trainer_grid():
+async def get_trainer_grid(response: Response):
     """
     Returns the meeting-wide trainer × race grid.
     Response: {"status": "ready"|"loading", "summary": {...}|None}
     """
     cached = meeting_cache.get()
+    # Cache 30s in the browser; 60s on shared caches/proxies.
+    response.headers["Cache-Control"] = "public, max-age=30, s-maxage=60"
     if cached is not None:
         return {"status": "ready", "summary": cached}
     if not meeting_cache.is_loading():

@@ -1,20 +1,28 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, lazy, Suspense } from 'react'
 import { useWebSocket } from './hooks/useWebSocket'
 import { useRaceData } from './hooks/useRaceData'
 import { BetEntry } from './types'
 import StatusBar from './components/StatusBar'
 import RaceButtons from './components/RaceButtons'
-import ArchivePage from './components/ArchivePage'
 import BetTable from './components/BetTable'
-import TrendChart from './components/TrendChart'
-import BetAmountChart from './components/BetAmountChart'
-import ComboBetChart from './components/ComboBetChart'
-import ComboHorsePieChart from './components/ComboHorsePieChart'
 import HighAmountBetList from './components/HighAmountBetList'
 import HorseInfoTable from './components/HorseInfoTable'
-import SourcesPage from './components/SourcesPage'
 import TrainerGrid from './components/TrainerGrid'
 import { apiUrl } from './config'
+
+// Lazy-load: pulls Recharts (heavy) + admin/archive pages into separate chunks.
+const TrendChart = lazy(() => import('./components/TrendChart'))
+const BetAmountChart = lazy(() => import('./components/BetAmountChart'))
+const ComboBetChart = lazy(() => import('./components/ComboBetChart'))
+const ComboHorsePieChart = lazy(() => import('./components/ComboHorsePieChart'))
+const ArchivePage = lazy(() => import('./components/ArchivePage'))
+const SourcesPage = lazy(() => import('./components/SourcesPage'))
+
+const ChartFallback = () => (
+  <div style={{ height: 320, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#475569', fontSize: 12 }}>
+    Loading chart…
+  </div>
+)
 
 const HIGH_BET_THRESHOLD = 500_000
 
@@ -182,13 +190,17 @@ export default function App() {
 
       {showSources && (
         <div style={{ flex: 1, background: '#0f172a', minHeight: '100vh' }}>
-          <SourcesPage activeRace={activeRace} />
+          <Suspense fallback={<div style={{ padding: 40, color: '#64748b' }}>Loading…</div>}>
+            <SourcesPage activeRace={activeRace} />
+          </Suspense>
         </div>
       )}
 
       {showArchive && (
         <div style={{ flex: 1, background: '#0f172a', minHeight: '100vh' }}>
-          <ArchivePage />
+          <Suspense fallback={<div style={{ padding: 40, color: '#64748b' }}>Loading archive…</div>}>
+            <ArchivePage />
+          </Suspense>
         </div>
       )}
 
@@ -220,21 +232,25 @@ export default function App() {
             <h2 style={{ fontSize: 14, fontWeight: 600, color: '#cbd5e1', marginBottom: 12 }}>
               Win &amp; Place % Trend (last 15 min)
             </h2>
-            <TrendChart
-              series={horseSeries}
-              visibleKeys={visibleHorses}
-              keyLabel={k => `#${k}`}
-            />
+            <Suspense fallback={<ChartFallback />}>
+              <TrendChart
+                series={horseSeries}
+                visibleKeys={visibleHorses}
+                keyLabel={k => `#${k}`}
+              />
+            </Suspense>
           </section>
 
           <section style={{ background: '#1e293b', borderRadius: 8, padding: 16 }}>
             <h2 style={{ fontSize: 14, fontWeight: 600, color: '#cbd5e1', marginBottom: 12 }}>
               Combo % Trend (last 15 min)
             </h2>
-            <TrendChart
-              series={comboSeries}
-              emptyText="Collecting combo trend data…"
-            />
+            <Suspense fallback={<ChartFallback />}>
+              <TrendChart
+                series={comboSeries}
+                emptyText="Collecting combo trend data…"
+              />
+            </Suspense>
           </section>
         </div>
 
@@ -243,7 +259,9 @@ export default function App() {
           <h2 style={{ fontSize: 14, fontWeight: 600, color: '#cbd5e1', marginBottom: 12 }}>
             Total Bets by Horse (HK$)
           </h2>
-          <BetAmountChart aggregates={aggregates} horseNames={horseNames} horseBarriers={horseBarriers} />
+          <Suspense fallback={<ChartFallback />}>
+            <BetAmountChart aggregates={aggregates} horseNames={horseNames} horseBarriers={horseBarriers} />
+          </Suspense>
         </section>
 
         {/* Combo bets — bar chart + horse pie chart */}
@@ -256,12 +274,16 @@ export default function App() {
               Top {Math.min(comboAggregates.length, 15)} pairs by total HK$ · sorted by amount · from latest snapshot
             </p>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr minmax(280px, 380px)', gap: 24, alignItems: 'start' }}>
-              <ComboBetChart combos={comboAggregates} />
+              <Suspense fallback={<ChartFallback />}>
+                <ComboBetChart combos={comboAggregates} />
+              </Suspense>
               <div>
                 <h3 style={{ fontSize: 13, fontWeight: 600, color: '#94a3b8', marginBottom: 8 }}>
                   Most Picked Horses in Combos
                 </h3>
-                <ComboHorsePieChart combos={comboAggregates} />
+                <Suspense fallback={<ChartFallback />}>
+                  <ComboHorsePieChart combos={comboAggregates} />
+                </Suspense>
               </div>
             </div>
           </section>
