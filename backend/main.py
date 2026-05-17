@@ -7,7 +7,10 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .database import init_db
 from .scraper import start_browser, stop_browser
-from .scheduler import start_scheduler, stop_scheduler, add_tracked
+from .scheduler import (
+    start_scheduler, stop_scheduler,
+    add_tracked, remove_tracked, reset_race_state, get_tracked_states,
+)
 from .routers import races, ws, sources, meeting
 from . import horse_data, source_config, meeting_cache
 
@@ -35,6 +38,16 @@ async def _bootstrap_meeting() -> None:
         race_nos = [r["race_no"] for r in data.get("races", [])]
         if not race_nos:
             return
+        # Wipe state for races from a previous meeting day so today's
+        # smart-polling loop re-learns their start_time fresh.
+        today_set = set(race_nos)
+        meeting_date = data.get("race_date", "")
+        for s in get_tracked_states():
+            if s["race_no"] not in today_set:
+                remove_tracked(s["race_no"])
+            elif s["start_time"] and meeting_date and not s["start_time"].startswith(meeting_date):
+                reset_race_state(s["race_no"])
+
         log.info(f"Bootstrap: meeting has {len(race_nos)} races — auto-tracking all")
         for rn in race_nos:
             add_tracked(rn)

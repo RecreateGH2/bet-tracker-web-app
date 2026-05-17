@@ -14,9 +14,13 @@ import asyncio
 import logging
 import re
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from typing import Optional, Tuple, List
 from urllib.parse import urlparse, urlencode, parse_qsl, urlunparse
+
+# The stheadline site is Hong Kong racing — all clock values on the page are
+# in HKT regardless of where the scraper is running.
+_HKT = timezone(timedelta(hours=8))
 
 from playwright.async_api import async_playwright, Page, TimeoutError as PWTimeout
 from playwright_stealth import Stealth
@@ -326,19 +330,18 @@ async def _extract_start_time(page: Page, race_no: int) -> Optional[datetime]:
 
 
 def _parse_start_time_str(raw: str) -> Optional[datetime]:
-    """Parse a time string like '14:30' or ISO into today's aware datetime."""
+    """Parse a time string like '14:30' or ISO into a HKT-aware datetime."""
     raw = raw.strip()
-    # Try ISO first
+    # Try ISO first (already carries tz)
     try:
         return datetime.fromisoformat(raw.replace("Z", "+00:00"))
     except Exception:
         pass
-    # Try HH:MM
+    # HH:MM — interpret as today's HKT, regardless of server timezone
     try:
         t = datetime.strptime(raw, "%H:%M")
-        now = datetime.now()
-        local_dt = now.replace(hour=t.hour, minute=t.minute, second=0, microsecond=0)
-        return local_dt.astimezone()
+        now_hkt = datetime.now(_HKT)
+        return now_hkt.replace(hour=t.hour, minute=t.minute, second=0, microsecond=0)
     except Exception:
         pass
     return None

@@ -153,6 +153,24 @@ def remove_tracked(race_no: int) -> None:
         _save_tracked()
 
 
+def reset_race_state(race_no: int) -> None:
+    """Wipe a tracked race's state (start_time, status, etc.) — used when
+    the meeting day rolls over so yesterday's `ended` races re-scrape today."""
+    s = _tracked.get(race_no)
+    if s is None:
+        return
+    s.start_time = None
+    s.last_scrape_at = None
+    s.status = "unknown"
+    s.ended_at = None
+    s.manual_extend_until = None
+    s.last_entry_count = 0
+    _archive.pop(race_no, None)
+    _save_archive()
+    _save_tracked()
+    log.info(f"Race {race_no}: state reset (new meeting day)")
+
+
 def _state_to_dict(s: RaceState) -> dict:
     return {
         "race_no": s.race_no,
