@@ -33,7 +33,7 @@ export default function App() {
   const [showSources, setShowSources] = useState(false)
   const [showArchive, setShowArchive] = useState(false)
   const [visibleHorses, setVisibleHorses] = useState<Set<string>>(new Set())
-  const [highBets, setHighBets] = useState<BetEntry[]>([])
+  const [highBets, setHighBets] = useState<(BetEntry & { race_no: number })[]>([])
   const seenKeys = useRef<Set<string>>(new Set())
   const [raceStartTime, setRaceStartTime] = useState<string | null>(null)
   const [horseNames, setHorseNames] = useState<Record<string, string>>({})
@@ -103,30 +103,25 @@ export default function App() {
     }
   }, [messages, activeRace])
 
-  // Reset accumulated high-amount bets when switching race
-  useEffect(() => {
-    setHighBets([])
-    seenKeys.current = new Set()
-  }, [activeRace])
-
-  // Accumulate high-amount bets (>= 500K) for the active race only
+  // Accumulate high-amount bets (>= 500K) across ALL tracked races,
+  // tagging each entry with its race_no so the table can show a Race column.
   useEffect(() => {
     const last = messages.at(-1)
-    if (last?.type !== 'snapshot' || !last.entries) return
-    if (last.race_no !== activeRace) return   // ignore snapshots for other races
-    const newBig: BetEntry[] = []
+    if (last?.type !== 'snapshot' || !last.entries || last.race_no == null) return
+    const raceNo = last.race_no
+    const newBig: (BetEntry & { race_no: number })[] = []
     for (const entry of last.entries) {
       if (entry.amount < HIGH_BET_THRESHOLD) continue
-      const key = `${entry.scraped_at}|${entry.horse_number}|${entry.bet_type}|${entry.amount}`
+      const key = `${raceNo}|${entry.scraped_at}|${entry.horse_number}|${entry.bet_type}|${entry.amount}`
       if (!seenKeys.current.has(key)) {
         seenKeys.current.add(key)
-        newBig.push(entry)
+        newBig.push({ ...entry, race_no: raceNo })
       }
     }
     if (newBig.length > 0) {
       setHighBets(prev => [...newBig, ...prev])
     }
-  }, [messages, activeRace])
+  }, [messages])
 
   const toggleHorse = (h: string) => {
     setVisibleHorses(prev => {

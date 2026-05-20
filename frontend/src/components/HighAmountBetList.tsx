@@ -1,7 +1,7 @@
 import { BetEntry } from '../types'
 
 interface Props {
-  bets: BetEntry[]
+  bets: (BetEntry & { race_no: number })[]
 }
 
 const BET_TYPE_LABEL: Record<string, string> = {
@@ -44,6 +44,7 @@ export default function HighAmountBetList({ bets }: Props) {
         <thead>
           <tr style={{ borderBottom: '1px solid #334155', background: '#1e293b' }}>
             <th style={{ padding: '8px 12px', color: '#94a3b8', textAlign: 'left', whiteSpace: 'nowrap' }}>Time</th>
+            <th style={{ padding: '8px 12px', color: '#94a3b8', textAlign: 'center', whiteSpace: 'nowrap' }}>Race</th>
             <th style={{ padding: '8px 12px', color: '#94a3b8', textAlign: 'left' }}>Horse</th>
             <th style={{ padding: '8px 12px', color: '#94a3b8', textAlign: 'left' }}>Type</th>
             <th style={{ padding: '8px 12px', color: '#94a3b8', textAlign: 'right', whiteSpace: 'nowrap' }}>Amount</th>
@@ -61,6 +62,21 @@ export default function HighAmountBetList({ bets }: Props) {
             >
               <td style={{ padding: '7px 12px', color: '#64748b', whiteSpace: 'nowrap' }}>
                 {formatTime(bet.scraped_at)}
+              </td>
+              <td style={{ padding: '7px 12px', textAlign: 'center' }}>
+                <span style={{
+                  display: 'inline-block',
+                  padding: '2px 7px',
+                  borderRadius: 4,
+                  fontSize: 11,
+                  fontWeight: 700,
+                  background: '#1e3a8a',
+                  color: '#93c5fd',
+                  minWidth: 26,
+                  textAlign: 'center',
+                }}>
+                  R{bet.race_no}
+                </span>
               </td>
               <td style={{ padding: '7px 12px', fontWeight: 700, color: '#f1f5f9' }}>
                 #{bet.horse_number}
