@@ -155,7 +155,9 @@ def remove_tracked(race_no: int) -> None:
 
 def reset_race_state(race_no: int) -> None:
     """Wipe a tracked race's state (start_time, status, etc.) — used when
-    the meeting day rolls over so yesterday's `ended` races re-scrape today."""
+    the meeting day rolls over so yesterday's `ended` races re-scrape today.
+    Also clears the in-memory horse_cache for this race so stale data from
+    the previous meeting doesn't bleed into today."""
     s = _tracked.get(race_no)
     if s is None:
         return
@@ -166,6 +168,8 @@ def reset_race_state(race_no: int) -> None:
     s.manual_extend_until = None
     s.last_entry_count = 0
     _archive.pop(race_no, None)
+    from . import horse_cache
+    horse_cache.clear_race(race_no)
     _save_archive()
     _save_tracked()
     log.info(f"Race {race_no}: state reset (new meeting day)")

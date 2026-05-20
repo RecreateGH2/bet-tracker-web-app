@@ -63,6 +63,24 @@ logging.basicConfig(
 )
 
 
+async def _periodic_browser_restart_loop() -> None:
+    """Restart the shared Playwright browser every 4 hours. Long-running
+    Chromium sessions tend to accumulate dead state (we've seen `page.goto`
+    hang indefinitely after a couple of days), so this is a cheap reset."""
+    INTERVAL = 4 * 60 * 60   # 4 hours
+    while True:
+        try:
+            await asyncio.sleep(INTERVAL)
+            log.info("Periodic browser restart firing")
+            from .scraper import restart_browser
+            await restart_browser()
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            log.error(f"Browser restart loop error: {e}")
+            await asyncio.sleep(300)
+
+
 async def _daily_bootstrap_loop() -> None:
     """Re-run bootstrap once a day at 10:00 HKT (catches new meetings)."""
     from datetime import datetime, timezone, timedelta
@@ -94,9 +112,11 @@ async def lifespan(app: FastAPI):
     start_scheduler()
     bootstrap_task = asyncio.create_task(_bootstrap_meeting())
     daily_task = asyncio.create_task(_daily_bootstrap_loop())
+    browser_task = asyncio.create_task(_periodic_browser_restart_loop())
     yield
     bootstrap_task.cancel()
     daily_task.cancel()
+    browser_task.cancel()
     stop_scheduler()
     await stop_browser()
 

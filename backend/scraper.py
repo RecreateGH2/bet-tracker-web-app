@@ -103,17 +103,35 @@ async def new_page():
 
 async def stop_browser():
     global _browser, _playwright, _pw_cm, _context
-    if _context:
-        await _context.close()
-        _context = None
-    if _browser:
-        await _browser.close()
-        _browser = None
-    if _pw_cm:
-        await _pw_cm.__aexit__(None, None, None)
-        _pw_cm = None
-        _playwright = None
+    try:
+        if _context:
+            await _context.close()
+    except Exception:
+        pass
+    _context = None
+    try:
+        if _browser:
+            await _browser.close()
+    except Exception:
+        pass
+    _browser = None
+    try:
+        if _pw_cm:
+            await _pw_cm.__aexit__(None, None, None)
+    except Exception:
+        pass
+    _pw_cm = None
+    _playwright = None
     log.info("Playwright browser stopped")
+
+
+async def restart_browser():
+    """Tear down the shared browser/context and start fresh. Used by the
+    periodic restart loop to prevent the long-running Playwright session
+    from accumulating dead state (which has wedged scrapes in the past)."""
+    log.info("Restarting Playwright browser (recovery)")
+    await stop_browser()
+    await start_browser()
 
 
 async def scrape_race(race_no: int) -> ScrapeResult:
