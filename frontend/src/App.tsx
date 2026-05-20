@@ -230,7 +230,7 @@ export default function App() {
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(360px, 1fr))', gap: 16 }}>
           <section style={{ background: '#1e293b', borderRadius: 8, padding: 16 }}>
             <h2 style={{ fontSize: 14, fontWeight: 600, color: '#cbd5e1', marginBottom: 12 }}>
-              Win &amp; Place % Trend (last 15 min)
+              獨贏及位罝走勢
             </h2>
             <Suspense fallback={<ChartFallback />}>
               <TrendChart
@@ -243,7 +243,7 @@ export default function App() {
 
           <section style={{ background: '#1e293b', borderRadius: 8, padding: 16 }}>
             <h2 style={{ fontSize: 14, fontWeight: 600, color: '#cbd5e1', marginBottom: 12 }}>
-              Combo % Trend (last 15 min)
+              連贏走勢
             </h2>
             <Suspense fallback={<ChartFallback />}>
               <TrendChart
@@ -257,7 +257,7 @@ export default function App() {
         {/* Total Bets by Horse — full width horizontal bar chart */}
         <section style={{ background: '#1e293b', borderRadius: 8, padding: 16 }}>
           <h2 style={{ fontSize: 14, fontWeight: 600, color: '#cbd5e1', marginBottom: 12 }}>
-            Total Bets by Horse (HK$)
+            獨贏及位罝入飛比較
           </h2>
           <Suspense fallback={<ChartFallback />}>
             <BetAmountChart aggregates={aggregates} horseNames={horseNames} horseBarriers={horseBarriers} />
@@ -293,7 +293,7 @@ export default function App() {
         <section style={{ background: '#1e293b', borderRadius: 8, overflow: 'hidden' }}>
           <div style={{ padding: '12px 16px', borderBottom: '1px solid #334155', display: 'flex', alignItems: 'center', gap: 10 }}>
             <h2 style={{ fontSize: 14, fontWeight: 600, color: '#cbd5e1', margin: 0 }}>
-              High Amount Bets
+              大額落注紀錄
             </h2>
             <span style={{ fontSize: 12, color: '#64748b' }}>&gt; HK$500K</span>
             {highBets.length > 0 && (
