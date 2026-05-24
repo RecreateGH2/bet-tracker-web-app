@@ -9,6 +9,7 @@ The output per race contains:
   • live 大票房 ranking by total bet amount, for cross-reference
 """
 
+import asyncio
 import logging
 import os
 import re
@@ -37,10 +38,49 @@ _RESULTS_TTL = 15 * 60   # 15 min — race results trickle in throughout race da
 _results_cache: Dict[str, tuple] = {}
 
 
+_RESULTS_ALL_URL = "https://racing.hkjc.com/zh-hk/local/information/resultsall"
+
+# Walks the DOM of HKJC's resultsall page in document order, pairs each
+# "第 N 場" header with the next `table.result` after it, and emits a
+# {race_no: {pos: horse_no}} for top-3 finishers. Skips races with no
+# result table yet (they haven't finished).
+_RESULTS_ALL_JS = r"""() => {
+    const out = {};
+    let currentRace = null;
+    const elements = document.body.querySelectorAll('*');
+    for (const el of elements) {
+        // Only inspect leaf-ish elements so we don't match ancestors
+        // that contain the whole page text.
+        const text = (el.innerText || '').trim();
+        if (text && text.length < 80 && el.children.length === 0) {
+            const m = text.match(/第\s*(\d+)\s*場/);
+            if (m) {
+                currentRace = parseInt(m[1]);
+                continue;
+            }
+        }
+        if (el.tagName === 'TABLE'
+            && el.classList && el.classList.contains('result')
+            && currentRace && !(currentRace in out)) {
+            const top3 = {};
+            for (let i = 1; i < Math.min(4, el.rows.length); i++) {
+                const cells = el.rows[i].cells;
+                const pos = parseInt((cells[0]?.innerText || '').trim());
+                const hno = parseInt((cells[1]?.innerText || '').trim());
+                if (pos >= 1 && pos <= 3 && hno > 0) {
+                    top3[pos] = hno;
+                }
+            }
+            if (Object.keys(top3).length > 0) out[currentRace] = top3;
+        }
+    }
+    return out;
+}"""
+
+
 async def _get_meeting_results(meeting_date: str, force: bool = False) -> Dict[int, Dict[int, int]]:
-    """Fetch HKJC top-3 finishers for every race of a meeting. Cached 15 min.
-    Returns {race_no: {1: horse_no_1st, 2: horse_no_2nd, 3: horse_no_3rd}}.
-    Tries ST course first, then HV, and stops once a course gives any result."""
+    """One HTTP fetch of HKJC's resultsall page; returns top-3 finishers per
+    race that has been run. 15-min cache keyed by meeting_date."""
     now = time.time()
     if not force:
         cached = _results_cache.get(meeting_date)
@@ -48,30 +88,49 @@ async def _get_meeting_results(meeting_date: str, force: bool = False) -> Dict[i
             return cached[1]
 
     try:
-        from .meeting_scraper import scrape_results
         y, m, d = meeting_date.split("-")
         date_hkjc = f"{y}/{m}/{d}"
     except Exception:
         return {}
 
+    from . import scraper as _base_scraper
+    page = await _base_scraper.new_page()
     out: Dict[int, Dict[int, int]] = {}
-    for course in ("ST", "HV"):
-        course_results: Dict[int, Dict[int, int]] = {}
-        for race_no in range(1, 13):
+    try:
+        url = f"{_RESULTS_ALL_URL}?RaceDate={date_hkjc}"
+        await page.goto(url, wait_until="domcontentloaded", timeout=30_000)
+        await page.wait_for_timeout(2500)
+        raw = await page.evaluate(_RESULTS_ALL_JS)
+        # JS keys/values come back as strings → coerce
+        for rn_s, by_pos in (raw or {}).items():
             try:
-                r = await scrape_results(race_no, date_hkjc, course)
-                if r:
-                    # scrape_results returns {horse_no: position} — flip to {pos: horse_no}
-                    by_pos = {pos: hn for hn, pos in r.items()}
-                    course_results[race_no] = by_pos
-            except Exception as e:
-                log.debug(f"results {race_no} {course}: {e}")
-        if course_results:
-            out = course_results
-            break
+                rn = int(rn_s)
+            except (TypeError, ValueError):
+                continue
+            cleaned: Dict[int, int] = {}
+            for p_s, hn in (by_pos or {}).items():
+                try:
+                    cleaned[int(p_s)] = int(hn)
+                except (TypeError, ValueError):
+                    continue
+            if cleaned:
+                out[rn] = cleaned
+    except Exception as e:
+        log.error(f"resultsall fetch failed for {meeting_date}: {e}")
+    finally:
+        await page.close()
 
     _results_cache[meeting_date] = (now, out)
     return out
+
+
+def invalidate_results_cache(meeting_date: str | None = None) -> None:
+    """Clear the results cache. Called from the scheduler when a race ends
+    so the next analysis poll sees the latest standings."""
+    if meeting_date:
+        _results_cache.pop(meeting_date, None)
+    else:
+        _results_cache.clear()
 
 
 async def aggregate_per_race(per_source_extracted: Dict[str, dict], meeting_date: str = "") -> Dict[int, dict]:

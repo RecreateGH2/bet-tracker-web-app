@@ -380,6 +380,15 @@ async def _scrape_loop() -> None:
                             state.ended_at = now
                         # archive in the background (DB read)
                         asyncio.create_task(_archive_race(rn))
+                        # Invalidate the 馬王貼士 caches so the next analysis
+                        # poll picks up the freshly-published HKJC result.
+                        try:
+                            from . import tips_analyzer
+                            from .routers import tips as tips_router
+                            tips_analyzer.invalidate_results_cache()
+                            tips_router._analysis_cache.clear()
+                        except Exception as e:
+                            log.debug(f"tips cache invalidation skipped: {e}")
                     _save_tracked()
                 if interval is None:
                     continue
