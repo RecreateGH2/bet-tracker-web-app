@@ -13,6 +13,13 @@ services:
       - ./backend/data:/app/backend/data
     environment:
       - PYTHONUNBUFFERED=1
+      # Optional — enables the 馬王貼士 page's image extraction + summary.
+      # Uses Poe's OpenAI-compatible API at https://api.poe.com/v1.
+      # Set POE_API_KEY in a .env file at the compose project root.
+      - POE_API_KEY=${POE_API_KEY:-}
+      - POE_BASE_URL=${POE_BASE_URL:-https://api.poe.com/v1}
+      - POE_VISION_MODEL=${POE_VISION_MODEL:-Claude-Sonnet-4.5}
+      - POE_SUMMARY_MODEL=${POE_SUMMARY_MODEL:-Claude-Sonnet-4.5}
     # Chromium needs sufficient shared memory under Docker
     shm_size: 1gb
     healthcheck:

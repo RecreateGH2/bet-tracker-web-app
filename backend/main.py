@@ -11,7 +11,7 @@ from .scheduler import (
     start_scheduler, stop_scheduler,
     add_tracked, remove_tracked, reset_race_state, get_tracked_states,
 )
-from .routers import races, ws, sources, meeting
+from .routers import races, ws, sources, meeting, tips
 from . import horse_data, source_config, meeting_cache
 
 log = logging.getLogger(__name__)
@@ -134,6 +134,7 @@ app.include_router(races.router)
 app.include_router(ws.router)
 app.include_router(sources.router)
 app.include_router(meeting.router)
+app.include_router(tips.router)
 
 
 @app.get("/health")

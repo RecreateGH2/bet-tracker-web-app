@@ -17,6 +17,7 @@ const ComboBetChart = lazy(() => import('./components/ComboBetChart'))
 const ComboHorsePieChart = lazy(() => import('./components/ComboHorsePieChart'))
 const ArchivePage = lazy(() => import('./components/ArchivePage'))
 const SourcesPage = lazy(() => import('./components/SourcesPage'))
+const TipsPage = lazy(() => import('./components/TipsPage'))
 
 const ChartFallback = () => (
   <div style={{ height: 320, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#475569', fontSize: 12 }}>
@@ -39,6 +40,7 @@ export default function App() {
   const [horseNames, setHorseNames] = useState<Record<string, string>>({})
   const [horseBarriers, setHorseBarriers] = useState<Record<string, string>>({})
   const [meetingRefreshKey, setMeetingRefreshKey] = useState(0)
+  const [showTips, setShowTips] = useState(false)
 
   // Fetch horse names from race card when race changes or as data loads in
   useEffect(() => {
@@ -138,7 +140,7 @@ export default function App() {
         <h1 style={{ fontSize: 20, fontWeight: 700, color: '#f1f5f9' }}>
           大票房 Bet Tracker
         </h1>
-        {!showSources && !showArchive && (
+        {!showSources && !showArchive && !showTips && (
           <RaceButtons activeRace={activeRace} onSelect={(rn) => {
             setActiveRace(rn)
             fetch(apiUrl('/api/races/active'), {
@@ -150,7 +152,18 @@ export default function App() {
         )}
         <span style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
           <button
-            onClick={() => { setShowArchive(p => !p); setShowSources(false) }}
+            onClick={() => { setShowTips(p => !p); setShowSources(false); setShowArchive(false) }}
+            title={showTips ? 'Back to dashboard' : '馬王貼士'}
+            style={{
+              background: showTips ? '#1d4ed8' : 'rgba(255,255,255,0.08)',
+              border: 'none', borderRadius: 8, padding: '6px 12px',
+              color: '#e2e8f0', fontSize: 13, cursor: 'pointer',
+            }}
+          >
+            {showTips ? '← Dashboard' : '🏇 馬王貼士'}
+          </button>
+          <button
+            onClick={() => { setShowArchive(p => !p); setShowSources(false); setShowTips(false) }}
             title={showArchive ? 'Back to dashboard' : 'Final results archive'}
             style={{
               background: showArchive ? '#1d4ed8' : 'rgba(255,255,255,0.08)',
@@ -161,7 +174,7 @@ export default function App() {
             {showArchive ? '← Dashboard' : '🏁 Archive'}
           </button>
           <button
-            onClick={() => { setShowSources(p => !p); setShowArchive(false) }}
+            onClick={() => { setShowSources(p => !p); setShowArchive(false); setShowTips(false) }}
             title={showSources ? 'Back to dashboard' : 'Data sources'}
             style={{
               background: showSources ? '#1d4ed8' : 'rgba(255,255,255,0.08)',
@@ -199,7 +212,15 @@ export default function App() {
         </div>
       )}
 
-      <main style={{ flex: 1, padding: '16px 20px', display: (showSources || showArchive) ? 'none' : 'flex', flexDirection: 'column', gap: 20 }}>
+      {showTips && (
+        <div style={{ flex: 1, background: '#0f172a', minHeight: '100vh' }}>
+          <Suspense fallback={<div style={{ padding: 40, color: '#64748b' }}>Loading…</div>}>
+            <TipsPage />
+          </Suspense>
+        </div>
+      )}
+
+      <main style={{ flex: 1, padding: '16px 20px', display: (showSources || showArchive || showTips) ? 'none' : 'flex', flexDirection: 'column', gap: 20 }}>
         {/* Horse filter toggles */}
         {allHorseNumbers.length > 0 && (
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>

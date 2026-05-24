@@ -53,6 +53,41 @@ export interface ArchivedRace {
   aggregates: HorseAggregate[]
 }
 
+// ── 馬王貼士 (tipster recommendations) ────────────────────────────────────
+export interface TipImage {
+  filename: string
+  size: number
+  uploaded_at: string
+  extracted: boolean
+  source_name: string | null
+  race_count: number
+}
+
+export interface TipsConsensusHorse {
+  horse_no: number
+  votes: number
+  sources: string[]
+}
+
+export interface TipsBetRankEntry {
+  rank: number
+  horse_no: number
+  total_bet: number
+}
+
+export interface TipsRaceAnalysis {
+  top4: TipsConsensusHorse[]
+  key_pick_consensus: { horse_no: number; votes: number } | null
+  bet_ranking: TipsBetRankEntry[]
+  total_sources: number
+}
+
+export interface TipsAnalysisResponse {
+  races: Record<string, TipsRaceAnalysis>   // key = race_no as string
+  summaries: Record<string, string>
+  source_count: number
+}
+
 export interface TimePoint {
   time: string      // ISO string
   win_share_pct: number
