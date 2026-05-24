@@ -127,7 +127,7 @@ async def get_analysis(meeting_date: str, force: bool = False):
     summaries: Dict[int, str] = {}
     if aggregated:
         gen = await asyncio.gather(
-            *[generate_summary(rn, data) for rn, data in aggregated.items()],
+            *[generate_summary(rn, data, meeting_date) for rn, data in aggregated.items()],
             return_exceptions=True,
         )
         for (rn, _), summary in zip(aggregated.items(), gen):

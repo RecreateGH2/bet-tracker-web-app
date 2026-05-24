@@ -11,6 +11,7 @@ The output per race contains:
 
 import logging
 import os
+import re
 from collections import Counter, defaultdict
 from typing import Dict, List
 
@@ -19,6 +20,7 @@ from sqlalchemy import select
 from .database import AsyncSessionLocal
 from .models import BetEntry
 from .scheduler import _compute_aggregates
+from . import horse_cache, meeting_cache
 
 log = logging.getLogger(__name__)
 
@@ -116,8 +118,56 @@ async def _get_bet_rankings(race_nos: List[int]) -> Dict[int, List[dict]]:
     return out
 
 
-async def generate_summary(race_no: int, race_data: dict) -> str:
-    """Generate a 2-3 sentence Traditional Chinese summary for one race."""
+_TAG_RE = re.compile(r"<[^>]+>")
+
+
+def _html_to_text(html: str) -> str:
+    """Strip HTML tags from distance_summary_html → compact one-line text."""
+    if not html:
+        return ""
+    text = _TAG_RE.sub(" ", html)
+    text = text.replace("&nbsp;", " ").replace("&amp;", "&")
+    text = " ".join(text.split())   # collapse all whitespace
+    # Cap so the prompt stays compact
+    return text[:280] + ("…" if len(text) > 280 else "")
+
+
+def _horse_context_for(race_no: int, meeting_date: str, relevant: set[int]) -> str:
+    """Build a per-horse data block from horse_cache, only if the cache holds
+    data for the meeting we're analysing (cache is keyed by race_no but tied
+    to whatever meeting the backend last scraped — usually today)."""
+    # Only inject horse data if the cached meeting matches the analysis date.
+    cached_meeting = meeting_cache.get() or {}
+    if cached_meeting.get("race_date") != meeting_date:
+        return ""
+
+    horses = horse_cache.get_horse_info(race_no) or []
+    if not horses:
+        return ""
+
+    by_no = {int(h["horse_no"]): h for h in horses if h.get("horse_no") is not None}
+    lines = []
+    for hn in sorted(relevant):
+        info = by_no.get(hn)
+        if not info:
+            continue
+        name = info.get("horse_name") or ""
+        barrier = info.get("barrier") or "—"
+        trainer = info.get("trainer") or "—"
+        jockey = info.get("jockey") or "—"
+        ma288 = info.get("ma288_score") or "—"
+        recent = info.get("recent_results") or "—"
+        track = _html_to_text(info.get("distance_summary_html") or "")
+        lines.append(
+            f"  #{hn} {name} | 檔位 {barrier} | 練 {trainer} | 騎 {jockey} | "
+            f"MA288 {ma288} | 近6 {recent} | 賽道 {track or '—'}"
+        )
+    return "\n".join(lines)
+
+
+async def generate_summary(race_no: int, race_data: dict, meeting_date: str = "") -> str:
+    """Generate a Traditional Chinese analyst summary for one race, citing
+    concrete data (近6次成績, 賽道紀錄, 騎師/練馬師, MA288) where available."""
     top4 = race_data.get("top4") or []
     bet = race_data.get("bet_ranking") or []
 
@@ -148,28 +198,50 @@ async def generate_summary(race_no: int, race_data: dict) -> str:
         if key else "  (暫無重心共識)"
     )
 
-    prompt = f"""你係香港賽馬分析員。請根據以下數據,用繁體中文寫一段 2-3 句的總結,適合放在貼士頁面。
+    # Per-horse data for the horses we're going to discuss (consensus top-4 +
+    # 大票房 top-4). Pulled live from horse_cache for the meeting being
+    # analysed; empty string if not available (e.g. historical meeting).
+    relevant: set[int] = set()
+    for h in top4[:4]:
+        try: relevant.add(int(h["horse_no"]))
+        except (TypeError, ValueError): pass
+    for r in bet[:4]:
+        try: relevant.add(int(r["horse_no"]))
+        except (TypeError, ValueError): pass
+    horse_block = _horse_context_for(race_no, meeting_date, relevant)
+    horse_section = (
+        f"\n相關馬匹資料:\n{horse_block}\n"
+        if horse_block
+        else "\n(暫無馬匹詳細資料)\n"
+    )
 
-第 {race_no} 場,合共 {race_data['total_sources']} 個貼士來源。
+    prompt = f"""你係一位資深嘅香港賽馬分析員,專門寫貼士總結。請根據以下實際數據,
+為第 {race_no} 場寫一段 3-5 句嘅繁體中文分析,**所有論點都要引用具體數據支持**。
+
+第 {race_no} 場 — 合共 {race_data['total_sources']} 個貼士來源。
 
 貼士共識排名 (按加權票數):
 {tip_lines}
 {key_line}
 
-大票房入飛排名:
+大票房入飛排名 (按總注額):
 {bet_lines}
-
+{horse_section}
 寫作要求:
-- 指出共識頭馬 / 是否符合大票房排名
-- 點出是否有「冷門」(貼士推介但大票房入飛不在前 4 位)
-- 簡潔有力,口語化少少都得
-- 只回覆總結文字,唔好包 markdown 標題或前綴"""
+1. **開頭以「重心 #N 馬」起筆**,簡述呢匹馬點解係共識頭馬 (例:得幾多票、幾多個來源推介)。
+2. 引用該馬嘅「近6次成績」、「賽道紀錄」、「騎師/練馬師」或「MA288評分」其中至少一兩項
+   去解釋點解佢被睇好。例如「近6次有3-1-2」、「同條賽道贏過1場」、「莫雷拉策騎」等。
+3. 對比貼士共識同大票房入飛排名,指出兩者一致定有分歧 (邊隻馬大票房高捧但貼士冷門,
+   或者相反)。
+4. 如果貼士排第2-4 嘅有冷門馬 (即大票房入飛唔入前4位),簡述潛在價值。
+5. 全段唔好用 markdown,唔好用標題或前綴,純文字 3-5 句。
+6. 語氣係專業分析員,可帶少少粵語口語,但要實牙實齒、有數據撐腰、唔好流於空泛。"""
 
     client = AsyncOpenAI(api_key=_POE_KEY, base_url=_BASE_URL)
     try:
         resp = await client.chat.completions.create(
             model=_SUMMARY_MODEL,
-            max_tokens=400,
+            max_tokens=600,
             messages=[{"role": "user", "content": prompt}],
         )
         return (resp.choices[0].message.content or "").strip()
