@@ -31,8 +31,50 @@ _POE_KEY = os.getenv("POE_API_KEY", "").strip()
 _BASE_URL = os.getenv("POE_BASE_URL", "https://api.poe.com/v1")
 _SUMMARY_MODEL = os.getenv("POE_SUMMARY_MODEL", "Claude-Sonnet-4.5")
 
+# Results cache: meeting_date → (timestamp, {race_no: {pos: horse_no}})
+import time
+_RESULTS_TTL = 15 * 60   # 15 min — race results trickle in throughout race day
+_results_cache: Dict[str, tuple] = {}
 
-async def aggregate_per_race(per_source_extracted: Dict[str, dict]) -> Dict[int, dict]:
+
+async def _get_meeting_results(meeting_date: str, force: bool = False) -> Dict[int, Dict[int, int]]:
+    """Fetch HKJC top-3 finishers for every race of a meeting. Cached 15 min.
+    Returns {race_no: {1: horse_no_1st, 2: horse_no_2nd, 3: horse_no_3rd}}.
+    Tries ST course first, then HV, and stops once a course gives any result."""
+    now = time.time()
+    if not force:
+        cached = _results_cache.get(meeting_date)
+        if cached and (now - cached[0]) < _RESULTS_TTL:
+            return cached[1]
+
+    try:
+        from .meeting_scraper import scrape_results
+        y, m, d = meeting_date.split("-")
+        date_hkjc = f"{y}/{m}/{d}"
+    except Exception:
+        return {}
+
+    out: Dict[int, Dict[int, int]] = {}
+    for course in ("ST", "HV"):
+        course_results: Dict[int, Dict[int, int]] = {}
+        for race_no in range(1, 13):
+            try:
+                r = await scrape_results(race_no, date_hkjc, course)
+                if r:
+                    # scrape_results returns {horse_no: position} — flip to {pos: horse_no}
+                    by_pos = {pos: hn for hn, pos in r.items()}
+                    course_results[race_no] = by_pos
+            except Exception as e:
+                log.debug(f"results {race_no} {course}: {e}")
+        if course_results:
+            out = course_results
+            break
+
+    _results_cache[meeting_date] = (now, out)
+    return out
+
+
+async def aggregate_per_race(per_source_extracted: Dict[str, dict], meeting_date: str = "") -> Dict[int, dict]:
     race_votes: Dict[int, Counter] = defaultdict(Counter)
     race_sources: Dict[int, Dict[int, List[str]]] = defaultdict(lambda: defaultdict(list))
 
@@ -59,6 +101,9 @@ async def aggregate_per_race(per_source_extracted: Dict[str, dict]) -> Dict[int,
             # user. 重心 is now derived from the consensus winner below.
 
     bet_rankings = await _get_bet_rankings(sorted(race_votes.keys()))
+    meeting_results = (
+        await _get_meeting_results(meeting_date) if meeting_date else {}
+    )
 
     result: Dict[int, dict] = {}
     for rn in sorted(race_votes.keys()):
@@ -80,11 +125,15 @@ async def aggregate_per_race(per_source_extracted: Dict[str, dict]) -> Dict[int,
                 "votes": head["votes"],
                 "source_count": len(head["sources"]),
             }
+        # Race results — {pos: horse_no} for top-3 finishers if the race
+        # has already been run; empty dict if results not yet published.
+        race_results = meeting_results.get(rn, {})
         result[rn] = {
             "top4": top4,
             "key_pick_consensus": key_consensus,
             "bet_ranking": bet_rankings.get(rn, []),
             "total_sources": len(per_source_extracted),
+            "results": {str(pos): hn for pos, hn in race_results.items()},
         }
     return result
 

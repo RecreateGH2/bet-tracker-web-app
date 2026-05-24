@@ -192,12 +192,26 @@ export default function TipsPage() {
             {Object.keys(analysis.races).sort((a, b) => parseInt(a) - parseInt(b)).map(rn => {
               const r = analysis.races[rn]
               const summary = analysis.summaries[rn] || ''
+              const results = r.results || {}
+              const winnerHorse = results['1']
+              const placedHorses = new Set<number>([
+                ...(results['2'] !== undefined ? [results['2']] : []),
+                ...(results['3'] !== undefined ? [results['3']] : []),
+              ])
+              const hasResults = Object.keys(results).length > 0
+
+              const resultBadge = (hn: number) => {
+                if (hn === winnerHorse) return { text: 'W', bg: '#16a34a', fg: '#fff' }
+                if (placedHorses.has(hn)) return { text: 'Q', bg: '#2563eb', fg: '#fff' }
+                return null
+              }
+
               return (
                 <section key={rn} style={{
                   background: '#1e293b', borderRadius: 8, padding: 14,
                   border: '1px solid #334155',
                 }}>
-                  <div style={{ display: 'flex', alignItems: 'baseline', gap: 12, marginBottom: 10 }}>
+                  <div style={{ display: 'flex', alignItems: 'baseline', gap: 12, marginBottom: 10, flexWrap: 'wrap' }}>
                     <span style={{ fontSize: 16, fontWeight: 700, color: '#93c5fd' }}>R{rn}</span>
                     {r.key_pick_consensus && (
                       <span style={{ fontSize: 13, color: '#fbbf24', fontWeight: 600 }}>
@@ -207,21 +221,46 @@ export default function TipsPage() {
                         </span>
                       </span>
                     )}
+                    {hasResults && (
+                      <span style={{
+                        marginLeft: 'auto', display: 'flex', gap: 8, alignItems: 'center',
+                        background: '#0f172a', padding: '4px 10px', borderRadius: 6,
+                        border: '1px solid #334155', fontSize: 13,
+                      }}>
+                        <span style={{ color: '#94a3b8', fontSize: 11, marginRight: 2 }}>賽果</span>
+                        {(['1', '2', '3'] as const).map(pos => results[pos] !== undefined && (
+                          <span key={pos} style={{ color: pos === '1' ? '#fde047' : '#cbd5e1' }}>
+                            {pos === '1' ? '🥇' : pos === '2' ? '🥈' : '🥉'} #{results[pos]}
+                          </span>
+                        ))}
+                      </span>
+                    )}
                   </div>
 
                   {/* Top 4 consensus */}
                   <div style={{ display: 'flex', gap: 8, marginBottom: 10, flexWrap: 'wrap' }}>
                     {r.top4.map((h, i) => {
                       const inBetTop4 = r.bet_ranking.slice(0, 4).some(b => b.horse_no === h.horse_no)
+                      const badge = resultBadge(h.horse_no)
+                      const won = badge?.text === 'W'
+                      const placed = badge?.text === 'Q'
                       return (
                         <div key={h.horse_no} style={{
-                          background: i === 0 ? '#1e3a8a' : '#0f172a',
-                          border: `1px solid ${inBetTop4 ? '#22c55e' : '#334155'}`,
+                          background: won ? '#14532d' : placed ? '#1e3a8a' : (i === 0 ? '#1e3a8a' : '#0f172a'),
+                          border: `${won || placed ? 2 : 1}px solid ${won ? '#22c55e' : placed ? '#3b82f6' : (inBetTop4 ? '#22c55e' : '#334155')}`,
                           borderRadius: 6, padding: '6px 10px', minWidth: 90,
+                          position: 'relative',
                         }}>
                           <div style={{ fontSize: 11, color: '#64748b' }}>第 {i + 1} 位</div>
-                          <div style={{ fontSize: 14, fontWeight: 700, color: '#f1f5f9' }}>
+                          <div style={{ fontSize: 14, fontWeight: 700, color: '#f1f5f9', display: 'flex', alignItems: 'center', gap: 6 }}>
                             #{h.horse_no}
+                            {badge && (
+                              <span style={{
+                                background: badge.bg, color: badge.fg,
+                                fontSize: 10, fontWeight: 800, borderRadius: 3,
+                                padding: '0 5px', lineHeight: '15px',
+                              }}>{badge.text}</span>
+                            )}
                           </div>
                           <div style={{ fontSize: 10, color: '#94a3b8', marginTop: 2 }}>
                             {h.votes} 票 / {h.sources.length} 來源
@@ -235,11 +274,22 @@ export default function TipsPage() {
                   {r.bet_ranking.length > 0 && (
                     <div style={{ fontSize: 11, color: '#64748b', marginBottom: 8 }}>
                       大票房入飛排名:&nbsp;
-                      {r.bet_ranking.slice(0, 4).map((b, i) => (
-                        <span key={b.horse_no} style={{ color: '#cbd5e1', marginRight: 10 }}>
-                          {i + 1}. #{b.horse_no} (${(b.total_bet / 1000).toFixed(0)}K)
-                        </span>
-                      ))}
+                      {r.bet_ranking.slice(0, 4).map((b, i) => {
+                        const badge = resultBadge(b.horse_no)
+                        return (
+                          <span key={b.horse_no} style={{
+                            color: badge?.text === 'W' ? '#22c55e' : badge?.text === 'Q' ? '#60a5fa' : '#cbd5e1',
+                            fontWeight: badge ? 700 : 400,
+                            marginRight: 10,
+                          }}>
+                            {i + 1}. #{b.horse_no}
+                            {badge && <span style={{ marginLeft: 3, fontSize: 10 }}>{badge.text}</span>}
+                            <span style={{ color: '#475569', marginLeft: 3 }}>
+                              (${(b.total_bet / 1000).toFixed(0)}K)
+                            </span>
+                          </span>
+                        )
+                      })}
                     </div>
                   )}
 

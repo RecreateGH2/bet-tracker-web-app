@@ -84,6 +84,8 @@ export interface TipsRaceAnalysis {
   } | null
   bet_ranking: TipsBetRankEntry[]
   total_sources: number
+  // {pos: horse_no} for top-3 finishers from HKJC — empty until run.
+  results: Record<string, number>
 }
 
 export interface TipsAnalysisResponse {

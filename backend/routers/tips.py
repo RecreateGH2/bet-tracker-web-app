@@ -123,7 +123,7 @@ async def get_analysis(meeting_date: str, force: bool = False):
         _analysis_cache[meeting_date] = (now, result)
         return {**result, "cached": False, "age_seconds": 0}
 
-    aggregated = await aggregate_per_race(extracted)
+    aggregated = await aggregate_per_race(extracted, meeting_date)
     summaries: Dict[int, str] = {}
     if aggregated:
         gen = await asyncio.gather(
