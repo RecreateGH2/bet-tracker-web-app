@@ -2,7 +2,9 @@
 
 import asyncio
 import logging
+import time
 from pathlib import Path
+from typing import Dict, Tuple
 
 from fastapi import APIRouter, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse
@@ -13,6 +15,16 @@ from ..tips_extractor import extract_from_image, has_api_key
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/tips", tags=["tips"])
+
+# 馬王貼士 analysis is expensive (vision + N summary calls). Cache the
+# computed result per meeting_date for 15 min; uploads + deletes invalidate
+# the cache so the next request recomputes.
+_ANALYSIS_TTL_SECONDS = 15 * 60
+_analysis_cache: Dict[str, Tuple[float, dict]] = {}
+
+
+def _invalidate_analysis(meeting_date: str) -> None:
+    _analysis_cache.pop(meeting_date, None)
 
 
 @router.get("/meetings")
@@ -49,12 +61,14 @@ async def _extract_and_cache(meeting_date: str, filename: str, path: Path) -> No
         tips_storage.update_extracted_for_image(meeting_date, filename, data)
         race_count = len((data.get("races") or {}))
         log.info(f"tips: extracted {filename}: {race_count} races (source={data.get('source_name')})")
+        _invalidate_analysis(meeting_date)
 
 
 @router.delete("/{meeting_date}/{filename}")
 def delete_image(meeting_date: str, filename: str):
     if not tips_storage.delete_image(meeting_date, filename):
         raise HTTPException(status_code=404, detail="not found")
+    _invalidate_analysis(meeting_date)
     return {"deleted": filename}
 
 
@@ -91,21 +105,38 @@ async def re_extract_all(meeting_date: str):
 
 
 @router.get("/{meeting_date}/analysis")
-async def get_analysis(meeting_date: str):
+async def get_analysis(meeting_date: str, force: bool = False):
+    """
+    Returns the aggregated analysis for a meeting. Cached for 15 min per
+    meeting_date — pass ?force=true to bypass (the "重新分析" button does).
+    Cache is auto-invalidated when an image is uploaded, deleted, or
+    re-extracted.
+    """
+    now = time.time()
+    cached = _analysis_cache.get(meeting_date)
+    if not force and cached and (now - cached[0]) < _ANALYSIS_TTL_SECONDS:
+        return {**cached[1], "cached": True, "age_seconds": int(now - cached[0])}
+
     extracted = tips_storage.load_extracted(meeting_date)
     if not extracted:
-        return {"races": {}, "summaries": {}, "source_count": 0}
+        result = {"races": {}, "summaries": {}, "source_count": 0}
+        _analysis_cache[meeting_date] = (now, result)
+        return {**result, "cached": False, "age_seconds": 0}
+
     aggregated = await aggregate_per_race(extracted)
-    summaries = {}
+    summaries: Dict[int, str] = {}
     if aggregated:
-        results = await asyncio.gather(
+        gen = await asyncio.gather(
             *[generate_summary(rn, data) for rn, data in aggregated.items()],
             return_exceptions=True,
         )
-        for (rn, _), summary in zip(aggregated.items(), results):
+        for (rn, _), summary in zip(aggregated.items(), gen):
             summaries[rn] = summary if isinstance(summary, str) else ""
-    return {
+
+    result = {
         "races": {str(k): v for k, v in aggregated.items()},
         "summaries": {str(k): v for k, v in summaries.items()},
         "source_count": len(extracted),
     }
+    _analysis_cache[meeting_date] = (now, result)
+    return {**result, "cached": False, "age_seconds": 0}

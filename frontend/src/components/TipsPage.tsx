@@ -4,6 +4,11 @@ import { TipImage, TipsAnalysisResponse, TrainerGridResponse } from '../types'
 
 interface MeetingsResponse { meetings: string[]; extractor_ready: boolean }
 
+// Auto-refresh analysis at most every 15 min (matches backend cache TTL).
+const ANALYSIS_POLL_MS = 15 * 60 * 1000
+// Image list polling stays fast — it's a cheap filesystem listing.
+const IMAGES_POLL_MS = 5 * 1000
+
 function todayISO(): string {
   // Returns YYYY-MM-DD in HKT for the default meeting day picker.
   const fmt = new Intl.DateTimeFormat('en-CA', {
@@ -23,6 +28,7 @@ export default function TipsPage() {
   const [dragOver, setDragOver] = useState(false)
   const [uploadCount, setUploadCount] = useState(0)
   const [error, setError] = useState<string | null>(null)
+  const [uploadsExpanded, setUploadsExpanded] = useState(false)
 
   // Auto-pick today's meeting from the trainer-grid summary if available
   useEffect(() => {
@@ -52,7 +58,7 @@ export default function TipsPage() {
 
   useEffect(() => {
     loadImages()
-    const id = setInterval(loadImages, 5000)
+    const id = setInterval(loadImages, IMAGES_POLL_MS)
     return () => clearInterval(id)
   }, [loadImages])
 
@@ -84,10 +90,13 @@ export default function TipsPage() {
     loadImages()
   }, [meeting, loadImages])
 
-  const runAnalysis = useCallback(async () => {
+  const runAnalysis = useCallback(async (force = false) => {
     setAnalyzing(true)
     try {
-      const r = await fetch(apiUrl(`/api/tips/${meeting}/analysis`))
+      const u = force
+        ? apiUrl(`/api/tips/${meeting}/analysis?force=true`)
+        : apiUrl(`/api/tips/${meeting}/analysis`)
+      const r = await fetch(u)
       if (!r.ok) throw new Error('analysis failed')
       setAnalysis(await r.json())
     } catch (e: any) {
@@ -97,14 +106,14 @@ export default function TipsPage() {
     }
   }, [meeting])
 
-  // Auto-run analysis when meeting changes (if there are extracted images)
+  // Fetch analysis on meeting change, then refresh at most every 15 min
+  // (matches backend cache). The cache lets us safely re-fetch — if the
+  // window is still warm we just read the cached object.
   useEffect(() => {
-    if (images.some(i => i.extracted)) {
-      runAnalysis()
-    } else {
-      setAnalysis(null)
-    }
-  }, [images, runAnalysis])
+    runAnalysis(false)
+    const id = setInterval(() => runAnalysis(false), ANALYSIS_POLL_MS)
+    return () => clearInterval(id)
+  }, [runAnalysis])
 
   const extractedCount = images.filter(i => i.extracted).length
   const meetingOptions = useMemo(() => {
@@ -145,7 +154,7 @@ export default function TipsPage() {
           </span>
         )}
         <button
-          onClick={runAnalysis}
+          onClick={() => runAnalysis(true)}
           disabled={analyzing || extractedCount === 0}
           style={{
             marginLeft: 'auto',
@@ -154,40 +163,15 @@ export default function TipsPage() {
             color: '#fff', fontSize: 12, fontWeight: 700,
             cursor: extractedCount === 0 ? 'not-allowed' : 'pointer',
           }}
+          title="跳過快取,即時重新分析"
         >
           {analyzing ? '分析中…' : '重新分析'}
         </button>
       </div>
 
-      {/* Drag-and-drop upload */}
-      <div
-        onDragOver={e => { e.preventDefault(); setDragOver(true) }}
-        onDragLeave={() => setDragOver(false)}
-        onDrop={e => { e.preventDefault(); setDragOver(false); handleFiles(e.dataTransfer.files) }}
-        style={{
-          border: `2px dashed ${dragOver ? '#3b82f6' : '#334155'}`,
-          background: dragOver ? '#1e293b' : '#0f172a',
-          borderRadius: 10, padding: 24,
-          textAlign: 'center', marginBottom: 18,
-          transition: 'background 0.15s, border-color 0.15s',
-        }}
-      >
-        <div style={{ fontSize: 14, color: '#cbd5e1', marginBottom: 6 }}>
-          📥 將貼士截圖拖到呢度,或者
-        </div>
-        <label style={{
-          display: 'inline-block',
-          padding: '6px 14px', borderRadius: 6, cursor: 'pointer',
-          background: '#3b82f6', color: '#fff', fontSize: 12, fontWeight: 700,
-        }}>
-          選擇檔案
-          <input
-            type="file" multiple accept="image/png,image/jpeg"
-            onChange={e => handleFiles(e.target.files)}
-            style={{ display: 'none' }}
-          />
-        </label>
-      </div>
+      <p style={{ fontSize: 11, color: '#64748b', marginTop: -8, marginBottom: 14 }}>
+        分析每 15 分鐘自動更新一次。按「重新分析」可即時刷新。
+      </p>
 
       {error && (
         <div style={{
@@ -195,47 +179,6 @@ export default function TipsPage() {
           padding: '8px 12px', color: '#fca5a5', fontSize: 12, marginBottom: 14,
         }}>
           {error}
-        </div>
-      )}
-
-      {/* Image list */}
-      {images.length > 0 && (
-        <div style={{ marginBottom: 24 }}>
-          <h3 style={{ fontSize: 14, fontWeight: 600, color: '#cbd5e1', marginBottom: 8 }}>
-            已上載貼士
-          </h3>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: 10 }}>
-            {images.map(img => (
-              <div key={img.filename} style={{
-                background: '#1e293b', borderRadius: 8, padding: 8,
-                border: '1px solid #334155', fontSize: 11,
-              }}>
-                <img
-                  src={apiUrl(`/api/tips/${meeting}/image/${img.filename}`)}
-                  alt={img.filename}
-                  style={{ width: '100%', height: 140, objectFit: 'cover', borderRadius: 4, marginBottom: 6 }}
-                />
-                <div style={{ color: '#e2e8f0', fontWeight: 600, marginBottom: 2 }}>
-                  {img.source_name || img.filename}
-                </div>
-                <div style={{ color: '#64748b' }}>
-                  {img.extracted
-                    ? `✓ ${img.race_count} 場已讀取`
-                    : (extractorReady ? '⏳ 分析中…' : '✗ 未分析')}
-                </div>
-                <div style={{ display: 'flex', gap: 4, marginTop: 6 }}>
-                  <button
-                    onClick={() => handleReExtract(img.filename)}
-                    style={{ flex: 1, fontSize: 10, padding: '3px 6px', background: '#334155', border: 'none', color: '#cbd5e1', borderRadius: 4, cursor: 'pointer' }}
-                  >↺ 重讀</button>
-                  <button
-                    onClick={() => handleDelete(img.filename)}
-                    style={{ flex: 1, fontSize: 10, padding: '3px 6px', background: '#7f1d1d', border: 'none', color: '#fecaca', borderRadius: 4, cursor: 'pointer' }}
-                  >✕ 刪除</button>
-                </div>
-              </div>
-            ))}
-          </div>
         </div>
       )}
 
@@ -300,8 +243,8 @@ export default function TipsPage() {
                   {/* Generated summary */}
                   {summary && (
                     <div style={{
-                      fontSize: 12, color: '#e2e8f0', lineHeight: 1.55,
-                      background: '#0f172a', borderRadius: 6, padding: 10,
+                      fontSize: 14, color: '#e2e8f0', lineHeight: 1.6,
+                      background: '#0f172a', borderRadius: 6, padding: 12,
                       borderLeft: '3px solid #3b82f6',
                     }}>
                       {summary}
@@ -318,9 +261,101 @@ export default function TipsPage() {
         <div style={{ padding: 30, textAlign: 'center', color: '#64748b', fontSize: 13 }}>
           {extractorReady
             ? '貼士分析中,請稍候…'
-            : '請設定 ANTHROPIC_API_KEY 後再重試。'}
+            : '請設定 POE_API_KEY 後再重試。'}
         </div>
       )}
+
+      {/* ── Upload & uploaded list — collapsed at bottom ─────────────── */}
+      <section style={{ marginTop: 28, border: '1px solid #334155', borderRadius: 8, overflow: 'hidden' }}>
+        <button
+          onClick={() => setUploadsExpanded(p => !p)}
+          style={{
+            width: '100%', textAlign: 'left', padding: '12px 14px',
+            background: '#1e293b', border: 'none', color: '#cbd5e1',
+            fontSize: 13, fontWeight: 600, cursor: 'pointer',
+            display: 'flex', alignItems: 'center', gap: 10,
+          }}
+        >
+          <span style={{ color: '#64748b' }}>{uploadsExpanded ? '▾' : '▸'}</span>
+          上載 / 管理貼士
+          <span style={{ marginLeft: 'auto', fontSize: 11, color: '#64748b', fontWeight: 400 }}>
+            {images.length} 張 ({extractedCount} 已分析)
+          </span>
+        </button>
+
+        {uploadsExpanded && (
+          <div style={{ padding: 14, background: '#0f172a' }}>
+            <div
+              onDragOver={e => { e.preventDefault(); setDragOver(true) }}
+              onDragLeave={() => setDragOver(false)}
+              onDrop={e => { e.preventDefault(); setDragOver(false); handleFiles(e.dataTransfer.files) }}
+              style={{
+                border: `2px dashed ${dragOver ? '#3b82f6' : '#334155'}`,
+                background: dragOver ? '#1e293b' : '#172032',
+                borderRadius: 10, padding: 20,
+                textAlign: 'center', marginBottom: 14,
+                transition: 'background 0.15s, border-color 0.15s',
+              }}
+            >
+              <div style={{ fontSize: 13, color: '#cbd5e1', marginBottom: 6 }}>
+                📥 將貼士截圖拖到呢度,或者
+              </div>
+              <label style={{
+                display: 'inline-block',
+                padding: '6px 14px', borderRadius: 6, cursor: 'pointer',
+                background: '#3b82f6', color: '#fff', fontSize: 12, fontWeight: 700,
+              }}>
+                選擇檔案
+                <input
+                  type="file" multiple accept="image/png,image/jpeg"
+                  onChange={e => handleFiles(e.target.files)}
+                  style={{ display: 'none' }}
+                />
+              </label>
+            </div>
+
+            {images.length > 0 && (
+              <div>
+                <h3 style={{ fontSize: 13, fontWeight: 600, color: '#94a3b8', marginBottom: 8 }}>
+                  已上載貼士
+                </h3>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: 10 }}>
+                  {images.map(img => (
+                    <div key={img.filename} style={{
+                      background: '#1e293b', borderRadius: 8, padding: 8,
+                      border: '1px solid #334155', fontSize: 11,
+                    }}>
+                      <img
+                        src={apiUrl(`/api/tips/${meeting}/image/${img.filename}`)}
+                        alt={img.filename}
+                        style={{ width: '100%', height: 140, objectFit: 'cover', borderRadius: 4, marginBottom: 6 }}
+                      />
+                      <div style={{ color: '#e2e8f0', fontWeight: 600, marginBottom: 2 }}>
+                        {img.source_name || img.filename}
+                      </div>
+                      <div style={{ color: '#64748b' }}>
+                        {img.extracted
+                          ? `✓ ${img.race_count} 場已讀取`
+                          : (extractorReady ? '⏳ 分析中…' : '✗ 未分析')}
+                      </div>
+                      <div style={{ display: 'flex', gap: 4, marginTop: 6 }}>
+                        <button
+                          onClick={() => handleReExtract(img.filename)}
+                          style={{ flex: 1, fontSize: 10, padding: '3px 6px', background: '#334155', border: 'none', color: '#cbd5e1', borderRadius: 4, cursor: 'pointer' }}
+                        >↺ 重讀</button>
+                        <button
+                          onClick={() => handleDelete(img.filename)}
+                          style={{ flex: 1, fontSize: 10, padding: '3px 6px', background: '#7f1d1d', border: 'none', color: '#fecaca', borderRadius: 4, cursor: 'pointer' }}
+                        >✕ 刪除</button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+      </section>
     </div>
   )
 }
