@@ -13,6 +13,7 @@ import logging
 import os
 import re
 from collections import Counter, defaultdict
+from datetime import datetime, timezone, timedelta
 from typing import Dict, List
 
 from sqlalchemy import select
@@ -20,7 +21,9 @@ from sqlalchemy import select
 from .database import AsyncSessionLocal
 from .models import BetEntry
 from .scheduler import _compute_aggregates
-from . import horse_cache, meeting_cache
+from . import horse_cache
+
+_HKT = timezone(timedelta(hours=8))
 
 log = logging.getLogger(__name__)
 
@@ -133,12 +136,13 @@ def _html_to_text(html: str) -> str:
 
 
 def _horse_context_for(race_no: int, meeting_date: str, relevant: set[int]) -> str:
-    """Build a per-horse data block from horse_cache, only if the cache holds
-    data for the meeting we're analysing (cache is keyed by race_no but tied
-    to whatever meeting the backend last scraped — usually today)."""
-    # Only inject horse data if the cached meeting matches the analysis date.
-    cached_meeting = meeting_cache.get() or {}
-    if cached_meeting.get("race_date") != meeting_date:
+    """Build a per-horse data block from horse_cache. The cache is in-memory
+    and reset on meeting-day rollover, so its contents always reflect TODAY's
+    meeting. Only inject the data when the analysis is FOR today's meeting —
+    historical-meeting analyses skip horse data (it wouldn't be the right
+    field of horses anyway)."""
+    today_hkt = datetime.now(_HKT).strftime("%Y-%m-%d")
+    if meeting_date != today_hkt:
         return ""
 
     horses = horse_cache.get_horse_info(race_no) or []
