@@ -77,7 +77,11 @@ export interface TipsBetRankEntry {
 
 export interface TipsRaceAnalysis {
   top4: TipsConsensusHorse[]
-  key_pick_consensus: { horse_no: number; votes: number } | null
+  key_pick_consensus: {
+    horse_no: number
+    votes: number
+    source_count: number    // # of sources picking it in their top-4
+  } | null
   bet_ranking: TipsBetRankEntry[]
   total_sources: number
 }

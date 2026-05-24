@@ -200,8 +200,11 @@ export default function TipsPage() {
                   <div style={{ display: 'flex', alignItems: 'baseline', gap: 12, marginBottom: 10 }}>
                     <span style={{ fontSize: 16, fontWeight: 700, color: '#93c5fd' }}>R{rn}</span>
                     {r.key_pick_consensus && (
-                      <span style={{ fontSize: 12, color: '#fbbf24' }}>
-                        重心 #{r.key_pick_consensus.horse_no} ({r.key_pick_consensus.votes} 來源)
+                      <span style={{ fontSize: 13, color: '#fbbf24', fontWeight: 600 }}>
+                        重心 #{r.key_pick_consensus.horse_no}
+                        <span style={{ fontWeight: 400, marginLeft: 4, color: '#d97706' }}>
+                          ({r.key_pick_consensus.votes} 票 · {r.key_pick_consensus.source_count} 來源)
+                        </span>
                       </span>
                     )}
                   </div>

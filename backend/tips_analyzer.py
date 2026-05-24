@@ -30,7 +30,6 @@ _SUMMARY_MODEL = os.getenv("POE_SUMMARY_MODEL", "Claude-Sonnet-4.5")
 async def aggregate_per_race(per_source_extracted: Dict[str, dict]) -> Dict[int, dict]:
     race_votes: Dict[int, Counter] = defaultdict(Counter)
     race_sources: Dict[int, Dict[int, List[str]]] = defaultdict(lambda: defaultdict(list))
-    race_key_picks: Dict[int, Counter] = defaultdict(Counter)
 
     for filename, data in per_source_extracted.items():
         source = (data.get("source_name") or filename).strip() or filename
@@ -49,12 +48,10 @@ async def aggregate_per_race(per_source_extracted: Dict[str, dict]) -> Dict[int,
                 weight = max(1, 4 - rank)   # rank 0 → 4, rank 1 → 3, ...
                 race_votes[rn][hn_int] += weight
                 race_sources[rn][hn_int].append(source)
-            key = info.get("key_pick")
-            if key is not None:
-                try:
-                    race_key_picks[rn][int(key)] += 1
-                except (TypeError, ValueError):
-                    pass
+            # NOTE: the per-source `key_pick` field is intentionally ignored
+            # for the displayed 重心. Sources don't agree on 重心, and showing
+            # a 重心 that differs from the consensus top horse confuses the
+            # user. 重心 is now derived from the consensus winner below.
 
     bet_rankings = await _get_bet_rankings(sorted(race_votes.keys()))
 
@@ -67,10 +64,17 @@ async def aggregate_per_race(per_source_extracted: Dict[str, dict]) -> Dict[int,
                 "votes": votes,
                 "sources": race_sources[rn][hn],
             })
+        # 重心 = the single most-selected horse across all sources
+        # (i.e. the same horse as top4[0]). Always agrees with the top of the
+        # consensus ranking.
         key_consensus = None
-        if race_key_picks[rn]:
-            hn, votes = race_key_picks[rn].most_common(1)[0]
-            key_consensus = {"horse_no": hn, "votes": votes}
+        if top4:
+            head = top4[0]
+            key_consensus = {
+                "horse_no": head["horse_no"],
+                "votes": head["votes"],
+                "source_count": len(head["sources"]),
+            }
         result[rn] = {
             "top4": top4,
             "key_pick_consensus": key_consensus,
@@ -139,7 +143,10 @@ async def generate_summary(race_no: int, race_data: dict) -> str:
         for i, h in enumerate(top4)
     )
     key = race_data.get("key_pick_consensus")
-    key_line = f"  共識重心: #{key['horse_no']} 馬 ({key['votes']} 個來源)" if key else "  (無重心共識)"
+    key_line = (
+        f"  共識重心: #{key['horse_no']} 馬 (得 {key['votes']} 票,獲 {key['source_count']} 個來源推介)"
+        if key else "  (暫無重心共識)"
+    )
 
     prompt = f"""你係香港賽馬分析員。請根據以下數據,用繁體中文寫一段 2-3 句的總結,適合放在貼士頁面。
 
