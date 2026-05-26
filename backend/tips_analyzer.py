@@ -45,12 +45,17 @@ _RESULTS_ALL_URL = "https://racing.hkjc.com/zh-hk/local/information/resultsall"
 # {race_no: {pos: horse_no}} for top-3 finishers. Skips races with no
 # result table yet (they haven't finished).
 _RESULTS_ALL_JS = r"""() => {
-    const out = {};
+    // Page-displayed meeting date so the caller can verify HKJC actually
+    // served what we asked for (HKJC silently falls back to the latest
+    // meeting when given a future date).
+    const bodyText = document.body.innerText || '';
+    const dMatch = bodyText.match(/賽事日期[^\d]*(\d{2}\/\d{2}\/\d{4})/);
+    const pageDate = dMatch ? dMatch[1] : '';
+
+    const races = {};
     let currentRace = null;
     const elements = document.body.querySelectorAll('*');
     for (const el of elements) {
-        // Only inspect leaf-ish elements so we don't match ancestors
-        // that contain the whole page text.
         const text = (el.innerText || '').trim();
         if (text && text.length < 80 && el.children.length === 0) {
             const m = text.match(/第\s*(\d+)\s*場/);
@@ -61,20 +66,18 @@ _RESULTS_ALL_JS = r"""() => {
         }
         if (el.tagName === 'TABLE'
             && el.classList && el.classList.contains('result')
-            && currentRace && !(currentRace in out)) {
+            && currentRace && !(currentRace in races)) {
             const top3 = {};
             for (let i = 1; i < Math.min(4, el.rows.length); i++) {
                 const cells = el.rows[i].cells;
                 const pos = parseInt((cells[0]?.innerText || '').trim());
                 const hno = parseInt((cells[1]?.innerText || '').trim());
-                if (pos >= 1 && pos <= 3 && hno > 0) {
-                    top3[pos] = hno;
-                }
+                if (pos >= 1 && pos <= 3 && hno > 0) top3[pos] = hno;
             }
-            if (Object.keys(top3).length > 0) out[currentRace] = top3;
+            if (Object.keys(top3).length > 0) races[currentRace] = top3;
         }
     }
-    return out;
+    return { pageDate, races };
 }"""
 
 
@@ -100,21 +103,32 @@ async def _get_meeting_results(meeting_date: str, force: bool = False) -> Dict[i
         url = f"{_RESULTS_ALL_URL}?RaceDate={date_hkjc}"
         await page.goto(url, wait_until="domcontentloaded", timeout=30_000)
         await page.wait_for_timeout(2500)
-        raw = await page.evaluate(_RESULTS_ALL_JS)
-        # JS keys/values come back as strings → coerce
-        for rn_s, by_pos in (raw or {}).items():
-            try:
-                rn = int(rn_s)
-            except (TypeError, ValueError):
-                continue
-            cleaned: Dict[int, int] = {}
-            for p_s, hn in (by_pos or {}).items():
+        raw = await page.evaluate(_RESULTS_ALL_JS) or {}
+
+        # HKJC silently falls back to the latest meeting when given a
+        # future date. Compare the page-displayed 賽事日期 (DD/MM/YYYY)
+        # against what we requested — bail if they don't match.
+        expected_displayed = f"{d}/{m}/{y}"
+        page_date = (raw.get("pageDate") or "").strip()
+        if page_date and page_date != expected_displayed:
+            log.info(
+                f"resultsall: requested {meeting_date} but page shows "
+                f"{page_date} — meeting hasn't run yet; no results"
+            )
+        else:
+            for rn_s, by_pos in (raw.get("races") or {}).items():
                 try:
-                    cleaned[int(p_s)] = int(hn)
+                    rn = int(rn_s)
                 except (TypeError, ValueError):
                     continue
-            if cleaned:
-                out[rn] = cleaned
+                cleaned: Dict[int, int] = {}
+                for p_s, hn in (by_pos or {}).items():
+                    try:
+                        cleaned[int(p_s)] = int(hn)
+                    except (TypeError, ValueError):
+                        continue
+                if cleaned:
+                    out[rn] = cleaned
     except Exception as e:
         log.error(f"resultsall fetch failed for {meeting_date}: {e}")
     finally:
