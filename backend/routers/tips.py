@@ -63,12 +63,17 @@ def remove_handle(handle: str):
 
 
 @router.post("/auto-fetch")
-async def trigger_auto_fetch(meeting_date: str | None = None):
-    """Kick off an auto-fetch run in the background. Returns immediately."""
-    asyncio.create_task(run_auto_fetch(meeting_date))
+async def trigger_auto_fetch(
+    meeting_date: str | None = None,
+    venue: str | None = None,
+):
+    """Kick off an auto-fetch run in the background. Returns immediately.
+    `venue` is 沙田 / 跑馬地 — used to reject foreign-race posts."""
+    asyncio.create_task(run_auto_fetch(meeting_date, venue))
     return {
         "status": "started",
         "meeting_date": meeting_date,
+        "venue": venue,
         "handles": handles_config.get_all(),
     }
 

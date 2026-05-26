@@ -55,12 +55,16 @@ async def _bootstrap_meeting() -> None:
         await prefetch_all_races(race_nos)
 
         # On race-day mornings, also auto-pull tipster posts from the
-        # configured Threads handles. Runs sequentially with 75s spacing
-        # — typically takes ~10 min for 9 handles, fully in background.
+        # configured Threads handles. Runs sequentially with 75s spacing.
+        # Pass venue_name (沙田 / 跑馬地) so foreign-race posts get rejected.
         try:
             from .tips_auto import run_auto_fetch
-            log.info(f"Bootstrap: scheduling Threads auto-fetch for {meeting_date}")
-            asyncio.create_task(run_auto_fetch(meeting_date))
+            venue = data.get("venue_name") or ""
+            log.info(
+                f"Bootstrap: scheduling Threads auto-fetch for "
+                f"{meeting_date} @ {venue or '(any HK venue)'}"
+            )
+            asyncio.create_task(run_auto_fetch(meeting_date, venue))
         except Exception as e:
             log.error(f"Bootstrap: auto-fetch scheduling failed: {e}")
 

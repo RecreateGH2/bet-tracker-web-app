@@ -20,6 +20,7 @@ function todayISO(): string {
 
 export default function TipsPage() {
   const [meeting, setMeeting] = useState<string>(todayISO())
+  const [venue, setVenue] = useState<string>('')
   const [meetings, setMeetings] = useState<string[]>([])
   const [extractorReady, setExtractorReady] = useState<boolean>(true)
   const [images, setImages] = useState<TipImage[]>([])
@@ -35,10 +36,11 @@ export default function TipsPage() {
   const [handlesExpanded, setHandlesExpanded] = useState(false)
   const [autoFetching, setAutoFetching] = useState(false)
 
-  // Auto-pick today's meeting from the trainer-grid summary if available
+  // Auto-pick today's meeting + venue from the trainer-grid summary
   useEffect(() => {
     fetch(apiUrl('/api/meeting/trainer-grid')).then(r => r.json()).then((d: TrainerGridResponse) => {
       if (d.summary?.race_date) setMeeting(d.summary.race_date)
+      if (d.summary?.venue_name) setVenue(d.summary.venue_name)
     }).catch(() => {})
   }, [])
 
@@ -101,11 +103,13 @@ export default function TipsPage() {
   const triggerAutoFetch = useCallback(async () => {
     setAutoFetching(true)
     try {
-      await fetch(apiUrl(`/api/tips/auto-fetch?meeting_date=${meeting}`), { method: 'POST' })
+      const qs = new URLSearchParams({ meeting_date: meeting })
+      if (venue) qs.set('venue', venue)
+      await fetch(apiUrl(`/api/tips/auto-fetch?${qs.toString()}`), { method: 'POST' })
     } finally {
       setTimeout(() => setAutoFetching(false), 2000)
     }
-  }, [meeting])
+  }, [meeting, venue])
 
   useEffect(() => {
     loadImages()
@@ -197,6 +201,7 @@ export default function TipsPage() {
           {meetingOptions.map(m => (<option key={m} value={m}>{m}</option>))}
         </select>
         <span style={{ fontSize: 12, color: '#64748b' }}>
+          {venue && <span style={{ color: '#cbd5e1', marginRight: 8 }}>📍 {venue}</span>}
           {images.length} 張圖 · {extractedCount} 張已分析
         </span>
         {!extractorReady && (
@@ -450,6 +455,11 @@ export default function TipsPage() {
             <p style={{ fontSize: 11, color: '#64748b', marginBottom: 10 }}>
               系統會喺賽馬日早上自動瀏覽以下 Threads 帳號,拉取近 72 小時嘅貼士帖,
               下載相關截圖後自動分析。每個帳號之間間隔 75 秒以避開反爬蟲機制。
+              {venue && (
+                <span style={{ color: '#cbd5e1' }}>
+                  &nbsp;只接受提到「{venue}」嘅帖文,自動過濾愛爾蘭/日本等海外賽事。
+                </span>
+              )}
             </p>
             <div style={{ display: 'flex', gap: 6, marginBottom: 12 }}>
               <input
