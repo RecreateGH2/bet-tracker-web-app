@@ -12,7 +12,7 @@ from .scheduler import (
     add_tracked, remove_tracked, reset_race_state, get_tracked_states,
 )
 from .routers import races, ws, sources, meeting, tips
-from . import horse_data, source_config, meeting_cache
+from . import horse_data, source_config, meeting_cache, handles_config
 
 log = logging.getLogger(__name__)
 
@@ -53,6 +53,17 @@ async def _bootstrap_meeting() -> None:
             add_tracked(rn)
         log.info("Bootstrap: pre-fetching horse-info for every race")
         await prefetch_all_races(race_nos)
+
+        # On race-day mornings, also auto-pull tipster posts from the
+        # configured Threads handles. Runs sequentially with 75s spacing
+        # — typically takes ~10 min for 9 handles, fully in background.
+        try:
+            from .tips_auto import run_auto_fetch
+            log.info(f"Bootstrap: scheduling Threads auto-fetch for {meeting_date}")
+            asyncio.create_task(run_auto_fetch(meeting_date))
+        except Exception as e:
+            log.error(f"Bootstrap: auto-fetch scheduling failed: {e}")
+
         log.info("Bootstrap: complete")
     except Exception as e:
         log.error(f"Bootstrap failed: {e}")
@@ -107,6 +118,7 @@ async def _daily_bootstrap_loop() -> None:
 async def lifespan(app: FastAPI):
     source_config.init()
     horse_data.init()
+    handles_config.init()
     await init_db()
     await start_browser()
     start_scheduler()

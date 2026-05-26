@@ -63,6 +63,21 @@ export interface TipImage {
   race_count: number
 }
 
+// Full extracted JSON per image — used for the source-breakdown panel.
+export interface ExtractedRacePick {
+  top4: number[]
+  key_pick: number | null
+}
+
+export interface ExtractedImageData {
+  source_name: string | null
+  races: Record<string, ExtractedRacePick>
+}
+
+export interface ExtractedResponse {
+  extracted: Record<string, ExtractedImageData>   // filename → extraction
+}
+
 export interface TipsConsensusHorse {
   horse_no: number
   votes: number

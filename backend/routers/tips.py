@@ -9,8 +9,9 @@ from typing import Dict, Tuple
 from fastapi import APIRouter, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 
-from .. import tips_storage
+from .. import tips_storage, handles_config
 from ..tips_analyzer import aggregate_per_race, generate_summary
+from ..tips_auto import run_auto_fetch
 from ..tips_extractor import extract_from_image, has_api_key
 
 log = logging.getLogger(__name__)
@@ -32,6 +33,43 @@ def list_meetings():
     return {
         "meetings": tips_storage.list_meetings(),
         "extractor_ready": has_api_key(),
+    }
+
+
+# ── Auto-fetch from Threads handles ──────────────────────────────────────
+
+@router.get("/handles")
+def get_handles():
+    return {"handles": handles_config.get_all()}
+
+
+class HandleIn:
+    handle: str
+
+
+@router.post("/handles")
+async def add_handle(body: dict):
+    h = (body or {}).get("handle", "")
+    if not h:
+        raise HTTPException(status_code=400, detail="handle required")
+    added = handles_config.add(h)
+    return {"added": added, "handles": handles_config.get_all()}
+
+
+@router.delete("/handles/{handle}")
+def remove_handle(handle: str):
+    removed = handles_config.remove(handle)
+    return {"removed": removed, "handles": handles_config.get_all()}
+
+
+@router.post("/auto-fetch")
+async def trigger_auto_fetch(meeting_date: str | None = None):
+    """Kick off an auto-fetch run in the background. Returns immediately."""
+    asyncio.create_task(run_auto_fetch(meeting_date))
+    return {
+        "status": "started",
+        "meeting_date": meeting_date,
+        "handles": handles_config.get_all(),
     }
 
 

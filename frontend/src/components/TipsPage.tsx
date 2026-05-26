@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { apiUrl } from '../config'
-import { TipImage, TipsAnalysisResponse, TrainerGridResponse } from '../types'
+import { ExtractedResponse, TipImage, TipsAnalysisResponse, TrainerGridResponse } from '../types'
 
 interface MeetingsResponse { meetings: string[]; extractor_ready: boolean }
 
@@ -29,6 +29,11 @@ export default function TipsPage() {
   const [uploadCount, setUploadCount] = useState(0)
   const [error, setError] = useState<string | null>(null)
   const [uploadsExpanded, setUploadsExpanded] = useState(false)
+  const [extracted, setExtracted] = useState<ExtractedResponse['extracted']>({})
+  const [handles, setHandles] = useState<string[]>([])
+  const [newHandle, setNewHandle] = useState('')
+  const [handlesExpanded, setHandlesExpanded] = useState(false)
+  const [autoFetching, setAutoFetching] = useState(false)
 
   // Auto-pick today's meeting from the trainer-grid summary if available
   useEffect(() => {
@@ -49,11 +54,57 @@ export default function TipsPage() {
   // extractions are still pending so the UI updates as they complete)
   const loadImages = useCallback(async () => {
     try {
-      const res = await fetch(apiUrl(`/api/tips/${meeting}/images`))
-      if (!res.ok) return
-      const d = await res.json()
-      setImages(d.images ?? [])
+      const [imgRes, exRes] = await Promise.all([
+        fetch(apiUrl(`/api/tips/${meeting}/images`)),
+        fetch(apiUrl(`/api/tips/${meeting}/extracted`)),
+      ])
+      if (imgRes.ok) {
+        const d = await imgRes.json()
+        setImages(d.images ?? [])
+      }
+      if (exRes.ok) {
+        const d = await exRes.json()
+        setExtracted(d.extracted ?? {})
+      }
     } catch { /* ignore */ }
+  }, [meeting])
+
+  // Load Threads handles list
+  const loadHandles = useCallback(async () => {
+    try {
+      const r = await fetch(apiUrl('/api/tips/handles'))
+      if (!r.ok) return
+      const d = await r.json()
+      setHandles(d.handles ?? [])
+    } catch { /* ignore */ }
+  }, [])
+
+  useEffect(() => { loadHandles() }, [loadHandles])
+
+  const addHandle = useCallback(async () => {
+    const h = newHandle.trim()
+    if (!h) return
+    await fetch(apiUrl('/api/tips/handles'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ handle: h }),
+    })
+    setNewHandle('')
+    loadHandles()
+  }, [newHandle, loadHandles])
+
+  const removeHandle = useCallback(async (h: string) => {
+    await fetch(apiUrl(`/api/tips/handles/${encodeURIComponent(h)}`), { method: 'DELETE' })
+    loadHandles()
+  }, [loadHandles])
+
+  const triggerAutoFetch = useCallback(async () => {
+    setAutoFetching(true)
+    try {
+      await fetch(apiUrl(`/api/tips/auto-fetch?meeting_date=${meeting}`), { method: 'POST' })
+    } finally {
+      setTimeout(() => setAutoFetching(false), 2000)
+    }
   }, [meeting])
 
   useEffect(() => {
@@ -317,6 +368,149 @@ export default function TipsPage() {
             : '請設定 POE_API_KEY 後再重試。'}
         </div>
       )}
+
+      {/* ── Source breakdown ─────────────────────────────────────────── */}
+      {Object.keys(extracted).length > 0 && (
+        <section style={{ marginTop: 28 }}>
+          <h3 style={{ fontSize: 14, fontWeight: 700, color: '#cbd5e1', marginBottom: 10 }}>
+            各來源讀數 (Source Breakdown)
+          </h3>
+          <p style={{ fontSize: 11, color: '#64748b', marginTop: -4, marginBottom: 12 }}>
+            以下係系統從每個貼士截圖讀出嚟嘅原始數據。可以對照截圖核對準確性。
+          </p>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(360px, 1fr))', gap: 12 }}>
+            {Object.entries(extracted).map(([filename, data]) => {
+              const races = Object.entries(data.races || {})
+                .sort((a, b) => parseInt(a[0]) - parseInt(b[0]))
+              return (
+                <div key={filename} style={{
+                  background: '#1e293b', border: '1px solid #334155', borderRadius: 8,
+                  padding: 10, display: 'flex', gap: 10,
+                }}>
+                  <img
+                    src={apiUrl(`/api/tips/${meeting}/image/${filename}`)}
+                    alt={filename}
+                    style={{ width: 80, height: 110, objectFit: 'cover', borderRadius: 4, flexShrink: 0 }}
+                  />
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 12, fontWeight: 700, color: '#93c5fd', marginBottom: 2 }}>
+                      {data.source_name || filename}
+                    </div>
+                    <div style={{ fontSize: 10, color: '#64748b', marginBottom: 6, wordBreak: 'break-all' }}>
+                      {filename}
+                    </div>
+                    {races.length > 0 ? (
+                      <div style={{ display: 'grid', gap: 2 }}>
+                        {races.map(([rn, pick]) => (
+                          <div key={rn} style={{ fontSize: 12, color: '#e2e8f0' }}>
+                            <span style={{ color: '#94a3b8', marginRight: 6 }}>R{rn}</span>
+                            <span style={{ fontFamily: 'monospace' }}>
+                              {(pick.top4 || []).join(' · ')}
+                            </span>
+                            {pick.key_pick !== null && pick.key_pick !== undefined && (
+                              <span style={{ color: '#fbbf24', marginLeft: 6 }}>
+                                ★{pick.key_pick}
+                              </span>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <div style={{ fontSize: 11, color: '#7f1d1d' }}>
+                        ⚠ 未能讀取賽事數據
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        </section>
+      )}
+
+      {/* ── Threads auto-fetch (handles list) ─────────────────────────── */}
+      <section style={{ marginTop: 24, border: '1px solid #334155', borderRadius: 8, overflow: 'hidden' }}>
+        <button
+          onClick={() => setHandlesExpanded(p => !p)}
+          style={{
+            width: '100%', textAlign: 'left', padding: '12px 14px',
+            background: '#1e293b', border: 'none', color: '#cbd5e1',
+            fontSize: 13, fontWeight: 600, cursor: 'pointer',
+            display: 'flex', alignItems: 'center', gap: 10,
+          }}
+        >
+          <span style={{ color: '#64748b' }}>{handlesExpanded ? '▾' : '▸'}</span>
+          Threads 自動拉取 — 追蹤帳號清單
+          <span style={{ marginLeft: 'auto', fontSize: 11, color: '#64748b', fontWeight: 400 }}>
+            {handles.length} 個帳號
+          </span>
+        </button>
+        {handlesExpanded && (
+          <div style={{ padding: 14, background: '#0f172a' }}>
+            <p style={{ fontSize: 11, color: '#64748b', marginBottom: 10 }}>
+              系統會喺賽馬日早上自動瀏覽以下 Threads 帳號,拉取近 72 小時嘅貼士帖,
+              下載相關截圖後自動分析。每個帳號之間間隔 75 秒以避開反爬蟲機制。
+            </p>
+            <div style={{ display: 'flex', gap: 6, marginBottom: 12 }}>
+              <input
+                type="text"
+                value={newHandle}
+                onChange={e => setNewHandle(e.target.value)}
+                onKeyDown={e => { if (e.key === 'Enter') addHandle() }}
+                placeholder="加入新的 Threads handle (例如 yimu_1212)"
+                style={{
+                  flex: 1, background: '#1e293b', border: '1px solid #334155',
+                  color: '#e2e8f0', borderRadius: 6, padding: '6px 10px', fontSize: 12,
+                }}
+              />
+              <button
+                onClick={addHandle}
+                style={{
+                  padding: '6px 14px', background: '#3b82f6', color: '#fff',
+                  border: 'none', borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: 'pointer',
+                }}
+              >+ 加入</button>
+              <button
+                onClick={triggerAutoFetch}
+                disabled={autoFetching || handles.length === 0}
+                style={{
+                  padding: '6px 14px', background: '#16a34a', color: '#fff',
+                  border: 'none', borderRadius: 6, fontSize: 12, fontWeight: 700,
+                  cursor: autoFetching ? 'wait' : 'pointer', opacity: autoFetching ? 0.5 : 1,
+                }}
+              >
+                {autoFetching ? '啟動中…' : '⚡ 即時拉取'}
+              </button>
+            </div>
+            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+              {handles.map(h => (
+                <span key={h} style={{
+                  background: '#1e293b', border: '1px solid #334155',
+                  borderRadius: 12, padding: '4px 10px', fontSize: 12, color: '#cbd5e1',
+                  display: 'inline-flex', alignItems: 'center', gap: 6,
+                }}>
+                  <a
+                    href={`https://www.threads.com/@${h}`}
+                    target="_blank" rel="noopener noreferrer"
+                    style={{ color: '#93c5fd', textDecoration: 'none' }}
+                  >@{h}</a>
+                  <button
+                    onClick={() => removeHandle(h)}
+                    title="移除"
+                    style={{
+                      background: 'none', border: 'none', color: '#94a3b8',
+                      cursor: 'pointer', fontSize: 13, padding: 0,
+                    }}
+                  >×</button>
+                </span>
+              ))}
+              {handles.length === 0 && (
+                <span style={{ color: '#64748b', fontSize: 12 }}>未有帳號,加入一個試試。</span>
+              )}
+            </div>
+          </div>
+        )}
+      </section>
 
       {/* ── Upload & uploaded list — collapsed at bottom ─────────────── */}
       <section style={{ marginTop: 28, border: '1px solid #334155', borderRadius: 8, overflow: 'hidden' }}>
