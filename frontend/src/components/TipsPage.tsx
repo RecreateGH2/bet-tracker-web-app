@@ -35,6 +35,7 @@ export default function TipsPage() {
   const [newHandle, setNewHandle] = useState('')
   const [handlesExpanded, setHandlesExpanded] = useState(false)
   const [autoFetching, setAutoFetching] = useState(false)
+  const [editingFile, setEditingFile] = useState<string | null>(null)
 
   // Auto-pick today's meeting + venue from the trainer-grid summary
   useEffect(() => {
@@ -384,51 +385,18 @@ export default function TipsPage() {
             以下係系統從每個貼士截圖讀出嚟嘅原始數據。可以對照截圖核對準確性。
           </p>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(360px, 1fr))', gap: 12 }}>
-            {Object.entries(extracted).map(([filename, data]) => {
-              const races = Object.entries(data.races || {})
-                .sort((a, b) => parseInt(a[0]) - parseInt(b[0]))
-              return (
-                <div key={filename} style={{
-                  background: '#1e293b', border: '1px solid #334155', borderRadius: 8,
-                  padding: 10, display: 'flex', gap: 10,
-                }}>
-                  <img
-                    src={apiUrl(`/api/tips/${meeting}/image/${filename}`)}
-                    alt={filename}
-                    style={{ width: 80, height: 110, objectFit: 'cover', borderRadius: 4, flexShrink: 0 }}
-                  />
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontSize: 12, fontWeight: 700, color: '#93c5fd', marginBottom: 2 }}>
-                      {data.source_name || filename}
-                    </div>
-                    <div style={{ fontSize: 10, color: '#64748b', marginBottom: 6, wordBreak: 'break-all' }}>
-                      {filename}
-                    </div>
-                    {races.length > 0 ? (
-                      <div style={{ display: 'grid', gap: 2 }}>
-                        {races.map(([rn, pick]) => (
-                          <div key={rn} style={{ fontSize: 12, color: '#e2e8f0' }}>
-                            <span style={{ color: '#94a3b8', marginRight: 6 }}>R{rn}</span>
-                            <span style={{ fontFamily: 'monospace' }}>
-                              {(pick.top4 || []).join(' · ')}
-                            </span>
-                            {pick.key_pick !== null && pick.key_pick !== undefined && (
-                              <span style={{ color: '#fbbf24', marginLeft: 6 }}>
-                                ★{pick.key_pick}
-                              </span>
-                            )}
-                          </div>
-                        ))}
-                      </div>
-                    ) : (
-                      <div style={{ fontSize: 11, color: '#7f1d1d' }}>
-                        ⚠ 未能讀取賽事數據
-                      </div>
-                    )}
-                  </div>
-                </div>
-              )
-            })}
+            {Object.entries(extracted).map(([filename, data]) => (
+              <SourceCard
+                key={filename}
+                filename={filename}
+                meeting={meeting}
+                data={data}
+                editing={editingFile === filename}
+                onEdit={() => setEditingFile(filename)}
+                onCancel={() => setEditingFile(null)}
+                onSaved={() => { setEditingFile(null); loadImages() }}
+              />
+            ))}
           </div>
         </section>
       )}
@@ -613,6 +581,225 @@ export default function TipsPage() {
           </div>
         )}
       </section>
+    </div>
+  )
+}
+
+
+// ── Source card with inline edit ────────────────────────────────────────
+
+interface SourceCardProps {
+  filename: string
+  meeting: string
+  data: import('../types').ExtractedImageData & { edited?: boolean }
+  editing: boolean
+  onEdit: () => void
+  onCancel: () => void
+  onSaved: () => void
+}
+
+function SourceCard({ filename, meeting, data, editing, onEdit, onCancel, onSaved }: SourceCardProps) {
+  const races = Object.entries(data.races || {})
+    .sort((a, b) => parseInt(a[0]) - parseInt(b[0]))
+
+  if (editing) {
+    return (
+      <SourceEditor
+        filename={filename}
+        meeting={meeting}
+        data={data}
+        onCancel={onCancel}
+        onSaved={onSaved}
+      />
+    )
+  }
+
+  return (
+    <div style={{
+      background: '#1e293b', border: '1px solid #334155', borderRadius: 8,
+      padding: 10, display: 'flex', gap: 10,
+    }}>
+      <img
+        src={apiUrl(`/api/tips/${meeting}/image/${filename}`)}
+        alt={filename}
+        style={{ width: 80, height: 110, objectFit: 'cover', borderRadius: 4, flexShrink: 0 }}
+      />
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: 6, marginBottom: 2 }}>
+          <span style={{ fontSize: 12, fontWeight: 700, color: '#93c5fd', flex: 1, minWidth: 0,
+            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {data.source_name || filename}
+          </span>
+          {(data as any).edited && (
+            <span style={{ fontSize: 9, color: '#fbbf24', fontWeight: 700 }} title="人手校正">✎</span>
+          )}
+          <button
+            onClick={onEdit}
+            title="修正讀數"
+            style={{
+              background: '#334155', border: 'none', color: '#cbd5e1',
+              fontSize: 10, padding: '2px 8px', borderRadius: 4, cursor: 'pointer',
+            }}
+          >✎ 修正</button>
+        </div>
+        <div style={{ fontSize: 10, color: '#64748b', marginBottom: 6, wordBreak: 'break-all' }}>
+          {filename}
+        </div>
+        {races.length > 0 ? (
+          <div style={{ display: 'grid', gap: 2 }}>
+            {races.map(([rn, pick]) => (
+              <div key={rn} style={{ fontSize: 12, color: '#e2e8f0' }}>
+                <span style={{ color: '#94a3b8', marginRight: 6 }}>R{rn}</span>
+                <span style={{ fontFamily: 'monospace' }}>
+                  {(pick.top4 || []).join(' · ')}
+                </span>
+                {pick.key_pick !== null && pick.key_pick !== undefined && (
+                  <span style={{ color: '#fbbf24', marginLeft: 6 }}>
+                    ★{pick.key_pick}
+                  </span>
+                )}
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div style={{ fontSize: 11, color: '#7f1d1d' }}>
+            ⚠ 未能讀取賽事數據 — 撳「修正」手動輸入
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+
+// Inline editor. Per-race input format: "1,2,3,4 *1" — first 4 comma- or
+// space-separated numbers are top4, an optional " *N" or "★N" is the key.
+function SourceEditor({
+  filename, meeting, data, onCancel, onSaved,
+}: {
+  filename: string
+  meeting: string
+  data: import('../types').ExtractedImageData
+  onCancel: () => void
+  onSaved: () => void
+}) {
+  // Seed editor rows from existing races, plus an empty row for R12 if missing
+  const initialRows: Record<string, string> = {}
+  for (let n = 1; n <= 12; n++) {
+    const pick = data.races?.[String(n)]
+    if (!pick) {
+      initialRows[String(n)] = ''
+      continue
+    }
+    const top4 = (pick.top4 || []).slice(0, 4).join(',')
+    const key = pick.key_pick !== null && pick.key_pick !== undefined ? ` *${pick.key_pick}` : ''
+    initialRows[String(n)] = `${top4}${key}`
+  }
+  const [sourceName, setSourceName] = useState(data.source_name || '')
+  const [rows, setRows] = useState<Record<string, string>>(initialRows)
+  const [saving, setSaving] = useState(false)
+
+  const handleSave = async () => {
+    setSaving(true)
+    try {
+      const races: Record<string, { top4: number[]; key_pick: number | null }> = {}
+      for (const [rn, raw] of Object.entries(rows)) {
+        const text = raw.trim()
+        if (!text) continue
+        // Split off the key pick (after * or ★)
+        let body = text, key: number | null = null
+        const km = text.match(/[\*★]\s*(\d+)/)
+        if (km) {
+          key = parseInt(km[1])
+          body = text.replace(km[0], '')
+        }
+        const nums = body.split(/[\s,，·\-]+/)
+          .map(s => parseInt(s.trim()))
+          .filter(n => !isNaN(n) && n > 0 && n < 100)
+          .slice(0, 4)
+        if (nums.length === 0) continue
+        races[rn] = { top4: nums, key_pick: key }
+      }
+      const payload = { source_name: sourceName.trim() || null, races }
+      const r = await fetch(apiUrl(`/api/tips/${meeting}/extracted/${filename}`), {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      })
+      if (!r.ok) throw new Error(await r.text())
+      onSaved()
+    } catch (e: any) {
+      alert('Save failed: ' + (e?.message ?? 'unknown'))
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div style={{
+      background: '#1e293b', border: '2px solid #3b82f6', borderRadius: 8,
+      padding: 10, display: 'flex', gap: 10,
+    }}>
+      <img
+        src={apiUrl(`/api/tips/${meeting}/image/${filename}`)}
+        alt={filename}
+        style={{ width: 80, height: 110, objectFit: 'cover', borderRadius: 4, flexShrink: 0 }}
+      />
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ display: 'flex', gap: 6, marginBottom: 6 }}>
+          <input
+            type="text"
+            value={sourceName}
+            onChange={e => setSourceName(e.target.value)}
+            placeholder="來源名稱"
+            style={{
+              flex: 1, background: '#0f172a', border: '1px solid #334155',
+              color: '#e2e8f0', borderRadius: 4, padding: '4px 8px', fontSize: 12,
+            }}
+          />
+        </div>
+        <div style={{ fontSize: 10, color: '#64748b', marginBottom: 6 }}>
+          格式: <code style={{ color: '#cbd5e1' }}>1,2,3,4 *1</code> — 前 4 個馬號 + 星號後係重心 (可選)
+        </div>
+        <div style={{ display: 'grid', gap: 3, marginBottom: 8 }}>
+          {Object.entries(rows).map(([rn, val]) => (
+            <div key={rn} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <span style={{ fontSize: 11, color: '#94a3b8', minWidth: 24 }}>R{rn}</span>
+              <input
+                type="text"
+                value={val}
+                onChange={e => setRows(prev => ({ ...prev, [rn]: e.target.value }))}
+                placeholder="(空)"
+                style={{
+                  flex: 1, background: '#0f172a', border: '1px solid #334155',
+                  color: '#e2e8f0', borderRadius: 4, padding: '3px 8px',
+                  fontSize: 12, fontFamily: 'monospace',
+                }}
+              />
+            </div>
+          ))}
+        </div>
+        <div style={{ display: 'flex', gap: 6 }}>
+          <button
+            onClick={handleSave}
+            disabled={saving}
+            style={{
+              flex: 1, background: '#3b82f6', color: '#fff', border: 'none',
+              borderRadius: 4, padding: '5px 10px', fontSize: 11, fontWeight: 700,
+              cursor: saving ? 'wait' : 'pointer', opacity: saving ? 0.6 : 1,
+            }}
+          >{saving ? '儲存中…' : '✓ 儲存'}</button>
+          <button
+            onClick={onCancel}
+            disabled={saving}
+            style={{
+              flex: 1, background: '#475569', color: '#e2e8f0', border: 'none',
+              borderRadius: 4, padding: '5px 10px', fontSize: 11, fontWeight: 700,
+              cursor: 'pointer',
+            }}
+          >取消</button>
+        </div>
+      </div>
     </div>
   )
 }

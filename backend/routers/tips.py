@@ -128,6 +128,45 @@ def get_extracted(meeting_date: str):
     return {"extracted": tips_storage.load_extracted(meeting_date)}
 
 
+@router.patch("/{meeting_date}/extracted/{filename}")
+async def update_extracted(meeting_date: str, filename: str, body: dict):
+    """Manual override of the extracted picks for one image. Body shape:
+       { "source_name": "...", "races": { "1": {"top4":[1,2,3,4], "key_pick":1}, ... } }
+    Invalidates the analysis cache so the next poll re-aggregates."""
+    if tips_storage.get_image_path(meeting_date, filename) is None:
+        raise HTTPException(status_code=404, detail="image not found")
+    # Defensive cleanup: keep only allowed shape
+    cleaned_races: dict[str, dict] = {}
+    for rn, info in (body.get("races") or {}).items():
+        if not isinstance(info, dict):
+            continue
+        try:
+            int(rn)
+        except (TypeError, ValueError):
+            continue
+        top4_raw = info.get("top4") or []
+        top4 = []
+        for h in top4_raw[:4]:
+            try:
+                top4.append(int(h))
+            except (TypeError, ValueError):
+                continue
+        key_raw = info.get("key_pick")
+        try:
+            key = int(key_raw) if key_raw is not None and key_raw != "" else None
+        except (TypeError, ValueError):
+            key = None
+        cleaned_races[str(rn)] = {"top4": top4, "key_pick": key}
+    payload = {
+        "source_name": (body.get("source_name") or "").strip() or None,
+        "races": cleaned_races,
+        "edited": True,    # mark this entry as human-edited
+    }
+    tips_storage.update_extracted_for_image(meeting_date, filename, payload)
+    _invalidate_analysis(meeting_date)
+    return {"updated": filename, "data": payload}
+
+
 @router.post("/{meeting_date}/re-extract/{filename}")
 async def re_extract(meeting_date: str, filename: str):
     p = tips_storage.get_image_path(meeting_date, filename)
