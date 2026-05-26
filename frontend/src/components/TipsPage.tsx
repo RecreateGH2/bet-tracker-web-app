@@ -36,6 +36,7 @@ export default function TipsPage() {
   const [handlesExpanded, setHandlesExpanded] = useState(false)
   const [autoFetching, setAutoFetching] = useState(false)
   const [editingFile, setEditingFile] = useState<string | null>(null)
+  const [creatingText, setCreatingText] = useState(false)
 
   // Auto-pick today's meeting + venue from the trainer-grid summary
   useEffect(() => {
@@ -376,14 +377,46 @@ export default function TipsPage() {
       )}
 
       {/* ── Source breakdown ─────────────────────────────────────────── */}
-      {Object.keys(extracted).length > 0 && (
-        <section style={{ marginTop: 28 }}>
-          <h3 style={{ fontSize: 14, fontWeight: 700, color: '#cbd5e1', marginBottom: 10 }}>
+      <section style={{ marginTop: 28 }}>
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, marginBottom: 4 }}>
+          <h3 style={{ fontSize: 14, fontWeight: 700, color: '#cbd5e1', margin: 0 }}>
             各來源讀數 (Source Breakdown)
           </h3>
-          <p style={{ fontSize: 11, color: '#64748b', marginTop: -4, marginBottom: 12 }}>
-            以下係系統從每個貼士截圖讀出嚟嘅原始數據。可以對照截圖核對準確性。
-          </p>
+          <button
+            onClick={() => setCreatingText(p => !p)}
+            style={{
+              marginLeft: 'auto',
+              background: creatingText ? '#475569' : '#16a34a',
+              color: '#fff', border: 'none', borderRadius: 6,
+              padding: '5px 12px', fontSize: 12, fontWeight: 700, cursor: 'pointer',
+            }}
+          >
+            {creatingText ? '✕ 取消' : '+ 加入文字貼士'}
+          </button>
+        </div>
+        <p style={{ fontSize: 11, color: '#64748b', marginTop: 4, marginBottom: 12 }}>
+          以下係系統從每個貼士截圖讀出嚟嘅原始數據。可以對照截圖核對準確性,或撳每張卡嘅「✎ 修正」手動更正。
+        </p>
+
+        {creatingText && (
+          <div style={{ marginBottom: 14 }}>
+            <TextSourceCreator
+              meeting={meeting}
+              onCancel={() => setCreatingText(false)}
+              onSaved={() => { setCreatingText(false); loadImages() }}
+            />
+          </div>
+        )}
+
+        {Object.keys(extracted).length === 0 && !creatingText && (
+          <div style={{
+            padding: 20, textAlign: 'center', color: '#64748b', fontSize: 12,
+            background: '#0f172a', borderRadius: 6, border: '1px dashed #334155',
+          }}>
+            未有任何貼士。上載截圖或撳「+ 加入文字貼士」貼入文字版貼士。
+          </div>
+        )}
+        {Object.keys(extracted).length > 0 && (
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(360px, 1fr))', gap: 12 }}>
             {Object.entries(extracted).map(([filename, data]) => (
               <SourceCard
@@ -398,8 +431,8 @@ export default function TipsPage() {
               />
             ))}
           </div>
-        </section>
-      )}
+        )}
+      </section>
 
       {/* ── Threads auto-fetch (handles list) ─────────────────────────── */}
       <section style={{ marginTop: 24, border: '1px solid #334155', borderRadius: 8, overflow: 'hidden' }}>
@@ -614,16 +647,26 @@ function SourceCard({ filename, meeting, data, editing, onEdit, onCancel, onSave
     )
   }
 
+  const textOnly = (data as any).text_only === true
   return (
     <div style={{
       background: '#1e293b', border: '1px solid #334155', borderRadius: 8,
       padding: 10, display: 'flex', gap: 10,
     }}>
-      <img
-        src={apiUrl(`/api/tips/${meeting}/image/${filename}`)}
-        alt={filename}
-        style={{ width: 80, height: 110, objectFit: 'cover', borderRadius: 4, flexShrink: 0 }}
-      />
+      {textOnly ? (
+        <div style={{
+          width: 80, height: 110, borderRadius: 4, flexShrink: 0,
+          background: '#0f172a', border: '1px dashed #334155',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          fontSize: 10, color: '#64748b', textAlign: 'center', padding: 4,
+        }}>📝 文字<br />貼士</div>
+      ) : (
+        <img
+          src={apiUrl(`/api/tips/${meeting}/image/${filename}`)}
+          alt={filename}
+          style={{ width: 80, height: 110, objectFit: 'cover', borderRadius: 4, flexShrink: 0 }}
+        />
+      )}
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ display: 'flex', alignItems: 'baseline', gap: 6, marginBottom: 2 }}>
           <span style={{ fontSize: 12, fontWeight: 700, color: '#93c5fd', flex: 1, minWidth: 0,
@@ -698,6 +741,37 @@ function SourceEditor({
   const [sourceName, setSourceName] = useState(data.source_name || '')
   const [rows, setRows] = useState<Record<string, string>>(initialRows)
   const [saving, setSaving] = useState(false)
+  const [pasteText, setPasteText] = useState('')
+
+  // Parse a free-form text feed (e.g. "R1: 2-10-8-3 \n R2: 1-7-6-4 ...")
+  // and overwrite the per-race input rows. Same regex shape as backend's
+  // parse_text_tips so the formats stay in sync.
+  const parseAndFill = () => {
+    if (!pasteText.trim()) return
+    const next = { ...rows }
+    for (const raw of pasteText.split(/\r?\n/)) {
+      const line = raw.trim()
+      if (!line) continue
+      const m = line.match(/^(?:R|r|第)\s*(\d+)\s*(?:場)?\s*[:：/.、\-\s]+(.*)$/)
+      if (!m) continue
+      const rn = m[1]
+      let rest = m[2].replace(/[\[【].*?[\]】]/g, ' ')
+      let key: number | null = null
+      const km = rest.match(/[\*★]\s*(\d+)/)
+      if (km) {
+        key = parseInt(km[1])
+        rest = rest.replace(km[0], '')
+      }
+      const nums = (rest.match(/\d+/g) || [])
+        .map(s => parseInt(s))
+        .filter(n => n >= 1 && n < 100)
+        .slice(0, 4)
+      if (nums.length === 0) continue
+      next[rn] = `${nums.join(',')}${key !== null ? ` *${key}` : ''}`
+    }
+    setRows(next)
+    setPasteText('')
+  }
 
   const handleSave = async () => {
     setSaving(true)
@@ -761,6 +835,31 @@ function SourceEditor({
         <div style={{ fontSize: 10, color: '#64748b', marginBottom: 6 }}>
           格式: <code style={{ color: '#cbd5e1' }}>1,2,3,4 *1</code> — 前 4 個馬號 + 星號後係重心 (可選)
         </div>
+
+        {/* Paste-to-fill textarea */}
+        <div style={{ marginBottom: 8 }}>
+          <textarea
+            value={pasteText}
+            onChange={e => setPasteText(e.target.value)}
+            placeholder={"貼上文字貼士 (例如):\nR1: 2-10-8-3\nR2: 1-7-6-4\nR3: 1-6-10-2"}
+            rows={4}
+            style={{
+              width: '100%', background: '#0f172a', border: '1px solid #334155',
+              color: '#e2e8f0', borderRadius: 4, padding: '4px 8px', fontSize: 11,
+              fontFamily: 'monospace', resize: 'vertical', boxSizing: 'border-box',
+            }}
+          />
+          <button
+            onClick={parseAndFill}
+            disabled={!pasteText.trim()}
+            style={{
+              marginTop: 4, padding: '3px 10px', background: '#0891b2',
+              color: '#fff', border: 'none', borderRadius: 4, fontSize: 11,
+              fontWeight: 700, cursor: pasteText.trim() ? 'pointer' : 'not-allowed',
+              opacity: pasteText.trim() ? 1 : 0.5,
+            }}
+          >↧ 解析並填入</button>
+        </div>
         <div style={{ display: 'grid', gap: 3, marginBottom: 8 }}>
           {Object.entries(rows).map(([rn, val]) => (
             <div key={rn} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
@@ -799,6 +898,107 @@ function SourceEditor({
             }}
           >取消</button>
         </div>
+      </div>
+    </div>
+  )
+}
+
+
+// Standalone form for adding a new text-only tipster source from a pasted feed.
+function TextSourceCreator({
+  meeting, onCancel, onSaved,
+}: { meeting: string; onCancel: () => void; onSaved: () => void }) {
+  const [sourceName, setSourceName] = useState('')
+  const [text, setText] = useState('')
+  const [saving, setSaving] = useState(false)
+
+  const handleSave = async () => {
+    if (!sourceName.trim() || !text.trim()) {
+      alert('請輸入來源名稱同貼士文字')
+      return
+    }
+    setSaving(true)
+    try {
+      const r = await fetch(apiUrl(`/api/tips/${meeting}/text-source`), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ source_name: sourceName.trim(), text }),
+      })
+      if (!r.ok) throw new Error(await r.text())
+      onSaved()
+    } catch (e: any) {
+      alert('Save failed: ' + (e?.message ?? 'unknown'))
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div style={{
+      background: '#1e293b', border: '2px solid #16a34a', borderRadius: 8,
+      padding: 14,
+    }}>
+      <h4 style={{ fontSize: 13, fontWeight: 700, color: '#cbd5e1', margin: 0, marginBottom: 8 }}>
+        加入文字貼士
+      </h4>
+      <p style={{ fontSize: 11, color: '#64748b', marginBottom: 10 }}>
+        貼上 Threads 帖文嘅文字內容,系統會自動解析每場嘅馬號。每行格式:
+        <code style={{ marginLeft: 4, color: '#cbd5e1' }}>R1: 2-10-8-3</code>。
+        重心 (可選) 用 <code style={{ color: '#cbd5e1' }}>*N</code> 或 <code style={{ color: '#cbd5e1' }}>★N</code> 標示。
+      </p>
+      <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+        <div style={{ flex: '0 0 200px' }}>
+          <label style={{ fontSize: 11, color: '#94a3b8', display: 'block', marginBottom: 4 }}>
+            來源名稱
+          </label>
+          <input
+            type="text"
+            value={sourceName}
+            onChange={e => setSourceName(e.target.value)}
+            placeholder="例:@yimu_1212"
+            style={{
+              width: '100%', background: '#0f172a', border: '1px solid #334155',
+              color: '#e2e8f0', borderRadius: 4, padding: '6px 10px', fontSize: 12,
+              boxSizing: 'border-box',
+            }}
+          />
+        </div>
+        <div style={{ flex: 1, minWidth: 280 }}>
+          <label style={{ fontSize: 11, color: '#94a3b8', display: 'block', marginBottom: 4 }}>
+            貼士文字
+          </label>
+          <textarea
+            value={text}
+            onChange={e => setText(e.target.value)}
+            placeholder={'R1: 2-10-8-3\nR2: 1-7-6-4\nR3: 1-6-10-2\nR4: 5-3-7-1\n...'}
+            rows={9}
+            style={{
+              width: '100%', background: '#0f172a', border: '1px solid #334155',
+              color: '#e2e8f0', borderRadius: 4, padding: '6px 10px', fontSize: 12,
+              fontFamily: 'monospace', resize: 'vertical', boxSizing: 'border-box',
+            }}
+          />
+        </div>
+      </div>
+      <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
+        <button
+          onClick={handleSave}
+          disabled={saving}
+          style={{
+            padding: '6px 16px', background: '#16a34a', color: '#fff',
+            border: 'none', borderRadius: 6, fontSize: 12, fontWeight: 700,
+            cursor: saving ? 'wait' : 'pointer', opacity: saving ? 0.6 : 1,
+          }}
+        >{saving ? '儲存中…' : '✓ 加入'}</button>
+        <button
+          onClick={onCancel}
+          disabled={saving}
+          style={{
+            padding: '6px 16px', background: '#475569', color: '#e2e8f0',
+            border: 'none', borderRadius: 6, fontSize: 12, fontWeight: 700,
+            cursor: 'pointer',
+          }}
+        >取消</button>
       </div>
     </div>
   )

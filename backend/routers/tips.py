@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import re
 import time
 from pathlib import Path
 from typing import Dict, Tuple
@@ -26,6 +27,55 @@ _analysis_cache: Dict[str, Tuple[float, dict]] = {}
 
 def _invalidate_analysis(meeting_date: str) -> None:
     _analysis_cache.pop(meeting_date, None)
+
+
+def parse_text_tips(text: str) -> Dict[str, dict]:
+    """Parse a free-form text feed into {race_no: {top4, key_pick}}.
+
+    Accepts a wide variety of formats commonly seen in Thread tipster posts:
+        R1: 2-10-8-3
+        R1：2-10-8-3
+        R1/ 1-9-4-6
+        第1場：1-2-3-4
+        r1 1,2,3,4 *1
+    """
+    races: Dict[str, dict] = {}
+    for raw_line in (text or "").splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        # Capture race number after R / r / 第 ... 場
+        m = re.match(r"^(?:R|r|第)\s*(\d+)\s*(?:場)?\s*[:：/.、\-\s]+(.*)$", line)
+        if not m:
+            continue
+        rn = m.group(1)
+        rest = m.group(2)
+        # Strip a trailing "[…]" or "(備註)"
+        rest = re.sub(r"[\[【].*?[\]】]", " ", rest)
+        # Pull out the key pick if marked with * or ★
+        key = None
+        key_m = re.search(r"[\*★]\s*(\d+)", rest)
+        if key_m:
+            try:
+                key = int(key_m.group(1))
+            except ValueError:
+                key = None
+            rest = rest[:key_m.start()] + rest[key_m.end():]
+        # Pick up to 4 numbers
+        nums = re.findall(r"\d+", rest)
+        top4 = []
+        for n in nums:
+            try:
+                v = int(n)
+            except ValueError:
+                continue
+            if 1 <= v <= 99:
+                top4.append(v)
+            if len(top4) == 4:
+                break
+        if top4:
+            races[rn] = {"top4": top4, "key_pick": key}
+    return races
 
 
 @router.get("/meetings")
@@ -109,10 +159,72 @@ async def _extract_and_cache(meeting_date: str, filename: str, path: Path) -> No
 
 @router.delete("/{meeting_date}/{filename}")
 def delete_image(meeting_date: str, filename: str):
-    if not tips_storage.delete_image(meeting_date, filename):
+    """Remove an entry. Handles both image-backed sources (deletes the file
+    and the extracted record) and text-only sources (no file, just record)."""
+    deleted_img = tips_storage.delete_image(meeting_date, filename)
+    extracted = tips_storage.load_extracted(meeting_date)
+    had_extract = filename in extracted
+    if had_extract:
+        del extracted[filename]
+        tips_storage.save_extracted(meeting_date, extracted)
+    if not deleted_img and not had_extract:
         raise HTTPException(status_code=404, detail="not found")
     _invalidate_analysis(meeting_date)
     return {"deleted": filename}
+
+
+@router.post("/{meeting_date}/text-source")
+async def add_text_source(meeting_date: str, body: dict):
+    """Create a new text-only tipster source from a pasted feed. Body:
+       { "source_name": "...", "text": "R1: 2-10-8-3\\nR2: 1-7-6-4 ..." }
+    or pre-parsed:
+       { "source_name": "...", "races": { "1": {"top4":[...], "key_pick": null} } }
+    """
+    source_name = (body.get("source_name") or "").strip()
+    if not source_name:
+        raise HTTPException(status_code=400, detail="source_name required")
+
+    races = body.get("races") or {}
+    if not races and body.get("text"):
+        races = parse_text_tips(body["text"])
+
+    # Clean / coerce
+    cleaned: Dict[str, dict] = {}
+    for rn, info in (races or {}).items():
+        if not isinstance(info, dict):
+            continue
+        try:
+            int(rn)
+        except (TypeError, ValueError):
+            continue
+        top4 = []
+        for h in (info.get("top4") or [])[:4]:
+            try:
+                top4.append(int(h))
+            except (TypeError, ValueError):
+                continue
+        key_raw = info.get("key_pick")
+        try:
+            key = int(key_raw) if key_raw is not None and key_raw != "" else None
+        except (TypeError, ValueError):
+            key = None
+        if top4:
+            cleaned[str(rn)] = {"top4": top4, "key_pick": key}
+
+    if not cleaned:
+        raise HTTPException(status_code=400, detail="could not parse any races from input")
+
+    slug = re.sub(r"[^A-Za-z0-9]+", "_", source_name)[:40] or "src"
+    filename = f"text_{slug}_{int(time.time())}.txt"
+    payload = {
+        "source_name": source_name,
+        "races": cleaned,
+        "text_only": True,
+        "edited": True,
+    }
+    tips_storage.update_extracted_for_image(meeting_date, filename, payload)
+    _invalidate_analysis(meeting_date)
+    return {"filename": filename, "data": payload}
 
 
 @router.get("/{meeting_date}/image/{filename}")
