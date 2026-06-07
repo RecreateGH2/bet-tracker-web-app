@@ -268,15 +268,14 @@ export default function TipsPage() {
               const summary = analysis.summaries[rn] || ''
               const results = r.results || {}
               const winnerHorse = results['1']
-              const placedHorses = new Set<number>([
-                ...(results['2'] !== undefined ? [results['2']] : []),
-                ...(results['3'] !== undefined ? [results['3']] : []),
-              ])
+              const secondHorse = results['2']
+              const thirdHorse = results['3']
               const hasResults = Object.keys(results).length > 0
 
               const resultBadge = (hn: number) => {
                 if (hn === winnerHorse) return { text: 'W', bg: '#16a34a', fg: '#fff' }
-                if (placedHorses.has(hn)) return { text: 'Q', bg: '#2563eb', fg: '#fff' }
+                if (hn === secondHorse) return { text: 'Q', bg: '#2563eb', fg: '#fff' }
+                if (hn === thirdHorse) return { text: 'T', bg: '#a855f7', fg: '#fff' }
                 return null
               }
 
@@ -317,11 +316,21 @@ export default function TipsPage() {
                       const inBetTop4 = r.bet_ranking.slice(0, 4).some(b => b.horse_no === h.horse_no)
                       const badge = resultBadge(h.horse_no)
                       const won = badge?.text === 'W'
-                      const placed = badge?.text === 'Q'
+                      const placedQ = badge?.text === 'Q'
+                      const placedT = badge?.text === 'T'
+                      const highlight = won || placedQ || placedT
+                      const bgColor = won ? '#14532d'
+                        : placedQ ? '#1e3a8a'
+                        : placedT ? '#3b1f5b'
+                        : (i === 0 ? '#1e3a8a' : '#0f172a')
+                      const borderColor = won ? '#22c55e'
+                        : placedQ ? '#3b82f6'
+                        : placedT ? '#a855f7'
+                        : (inBetTop4 ? '#22c55e' : '#334155')
                       return (
                         <div key={h.horse_no} style={{
-                          background: won ? '#14532d' : placed ? '#1e3a8a' : (i === 0 ? '#1e3a8a' : '#0f172a'),
-                          border: `${won || placed ? 2 : 1}px solid ${won ? '#22c55e' : placed ? '#3b82f6' : (inBetTop4 ? '#22c55e' : '#334155')}`,
+                          background: bgColor,
+                          border: `${highlight ? 2 : 1}px solid ${borderColor}`,
                           borderRadius: 6, padding: '6px 10px', minWidth: 90,
                           position: 'relative',
                         }}>
@@ -350,9 +359,13 @@ export default function TipsPage() {
                       大票房入飛排名:&nbsp;
                       {r.bet_ranking.slice(0, 4).map((b, i) => {
                         const badge = resultBadge(b.horse_no)
+                        const textColor = badge?.text === 'W' ? '#22c55e'
+                          : badge?.text === 'Q' ? '#60a5fa'
+                          : badge?.text === 'T' ? '#c084fc'
+                          : '#cbd5e1'
                         return (
                           <span key={b.horse_no} style={{
-                            color: badge?.text === 'W' ? '#22c55e' : badge?.text === 'Q' ? '#60a5fa' : '#cbd5e1',
+                            color: textColor,
                             fontWeight: badge ? 700 : 400,
                             marginRight: 10,
                           }}>
