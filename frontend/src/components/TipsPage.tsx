@@ -37,6 +37,7 @@ export default function TipsPage() {
   const [autoFetching, setAutoFetching] = useState(false)
   const [editingFile, setEditingFile] = useState<string | null>(null)
   const [creatingText, setCreatingText] = useState(false)
+  const [rainy, setRainy] = useState(false)
 
   // Auto-pick today's meeting + venue from the trainer-grid summary
   useEffect(() => {
@@ -150,9 +151,10 @@ export default function TipsPage() {
   const runAnalysis = useCallback(async (force = false) => {
     setAnalyzing(true)
     try {
-      const u = force
-        ? apiUrl(`/api/tips/${meeting}/analysis?force=true`)
-        : apiUrl(`/api/tips/${meeting}/analysis`)
+      const params = new URLSearchParams()
+      if (force) params.set('force', 'true')
+      if (rainy) params.set('rainy', 'true')
+      const u = apiUrl(`/api/tips/${meeting}/analysis${params.size ? `?${params}` : ''}`)
       const r = await fetch(u)
       if (!r.ok) throw new Error('analysis failed')
       setAnalysis(await r.json())
@@ -161,11 +163,11 @@ export default function TipsPage() {
     } finally {
       setAnalyzing(false)
     }
-  }, [meeting])
+  }, [meeting, rainy])
 
-  // Fetch analysis on meeting change, then refresh at most every 15 min
-  // (matches backend cache). The cache lets us safely re-fetch — if the
-  // window is still warm we just read the cached object.
+  // Fetch analysis on meeting / rain-toggle change, then refresh at most
+  // every 15 min (matches backend cache). The cache lets us safely
+  // re-fetch — if the window is still warm we just read the cached object.
   useEffect(() => {
     runAnalysis(false)
     const id = setInterval(() => runAnalysis(false), ANALYSIS_POLL_MS)
@@ -202,6 +204,20 @@ export default function TipsPage() {
         >
           {meetingOptions.map(m => (<option key={m} value={m}>{m}</option>))}
         </select>
+        <button
+          onClick={() => setRainy(p => !p)}
+          title="開啟後分析會額外考慮雨天因素 (賽道紀錄、雨天場地等)"
+          style={{
+            padding: '5px 12px', borderRadius: 6,
+            border: rainy ? '1.5px solid #0ea5e9' : '1px solid #334155',
+            background: rainy ? '#0c4a6e' : 'transparent',
+            color: rainy ? '#bae6fd' : '#94a3b8',
+            fontSize: 12, fontWeight: 700, cursor: 'pointer',
+            display: 'inline-flex', alignItems: 'center', gap: 4,
+          }}
+        >
+          {rainy ? '☔ 下雨因素已加入' : '+ 下雨因素'}
+        </button>
         <span style={{ fontSize: 12, color: '#64748b' }}>
           {venue && <span style={{ color: '#cbd5e1', marginRight: 8 }}>📍 {venue}</span>}
           {images.length} 張圖 · {extractedCount} 張已分析

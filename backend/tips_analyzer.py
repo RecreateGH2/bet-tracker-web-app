@@ -291,9 +291,18 @@ def _horse_context_for(race_no: int, meeting_date: str, relevant: set[int]) -> s
     return "\n".join(lines)
 
 
-async def generate_summary(race_no: int, race_data: dict, meeting_date: str = "") -> str:
+async def generate_summary(
+    race_no: int,
+    race_data: dict,
+    meeting_date: str = "",
+    rainy: bool = False,
+) -> str:
     """Generate a Traditional Chinese analyst summary for one race, citing
-    concrete data (近6次成績, 賽道紀錄, 騎師/練馬師, MA288) where available."""
+    concrete data (近6次成績, 賽道紀錄, 騎師/練馬師, MA288) where available.
+
+    When `rainy=True`, the prompt explicitly asks the analyst to weigh each
+    horse's wet-track / soft-going track record (look for 雨/軟/淋/黏 in
+    賽道紀錄) before forming an opinion."""
     top4 = race_data.get("top4") or []
     bet = race_data.get("bet_ranking") or []
 
@@ -341,6 +350,18 @@ async def generate_summary(race_no: int, race_data: dict, meeting_date: str = ""
         else "\n(暫無馬匹詳細資料)\n"
     )
 
+    rain_block = ""
+    if rainy:
+        rain_block = (
+            "\n**場地狀況: 今日下雨,賽道偏軟/淋地。**\n"
+            "分析時必須額外考慮雨天因素:\n"
+            "- 查每匹馬嘅「賽道紀錄」入面係咪有「雨」、「軟」、「淋」、「黏」或「沙」等\n"
+            "  字眼嘅紀錄,呢類紀錄係雨天大利好。\n"
+            "- 如果共識頭馬冇雨天/軟地紀錄,要點出呢個保留位。\n"
+            "- 如果某匹大票房唔睇好但有出色雨天紀錄嘅馬,要 highlight 出嚟做潛在冷門。\n"
+            "- 騎師之中潘頓、莫雷拉、田泰安等通常較擅長操控馬匹喺雨天場地。\n"
+        )
+
     prompt = f"""你係一位資深嘅香港賽馬分析員,專門寫貼士總結。請根據以下實際數據,
 為第 {race_no} 場寫一段 3-5 句嘅繁體中文分析,**所有論點都要引用具體數據支持**。
 
@@ -352,7 +373,7 @@ async def generate_summary(race_no: int, race_data: dict, meeting_date: str = ""
 
 大票房入飛排名 (按總注額):
 {bet_lines}
-{horse_section}
+{horse_section}{rain_block}
 寫作要求:
 1. **開頭以「重心 #N 馬」起筆**,簡述呢匹馬點解係共識頭馬 (例:得幾多票、幾多個來源推介)。
 2. 引用該馬嘅「近6次成績」、「賽道紀錄」、「騎師/練馬師」或「MA288評分」其中至少一兩項
@@ -360,8 +381,9 @@ async def generate_summary(race_no: int, race_data: dict, meeting_date: str = ""
 3. 對比貼士共識同大票房入飛排名,指出兩者一致定有分歧 (邊隻馬大票房高捧但貼士冷門,
    或者相反)。
 4. 如果貼士排第2-4 嘅有冷門馬 (即大票房入飛唔入前4位),簡述潛在價值。
-5. 全段唔好用 markdown,唔好用標題或前綴,純文字 3-5 句。
-6. 語氣係專業分析員,可帶少少粵語口語,但要實牙實齒、有數據撐腰、唔好流於空泛。"""
+5. {("特別強調受雨天影響嘅評估 (邊匹馬適合下雨、邊匹要保留)。" if rainy else "")}
+6. 全段唔好用 markdown,唔好用標題或前綴,純文字 3-5 句。
+7. 語氣係專業分析員,可帶少少粵語口語,但要實牙實齒、有數據撐腰、唔好流於空泛。"""
 
     client = AsyncOpenAI(api_key=_POE_KEY, base_url=_BASE_URL)
     try:

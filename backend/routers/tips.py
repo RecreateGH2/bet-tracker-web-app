@@ -25,8 +25,15 @@ _ANALYSIS_TTL_SECONDS = 15 * 60
 _analysis_cache: Dict[str, Tuple[float, dict]] = {}
 
 
+def _analysis_cache_key(meeting_date: str, rainy: bool = False) -> str:
+    return f"{meeting_date}:rain" if rainy else meeting_date
+
+
 def _invalidate_analysis(meeting_date: str) -> None:
-    _analysis_cache.pop(meeting_date, None)
+    """Invalidate every cached variant for the given meeting date (dry + rainy)."""
+    for key in list(_analysis_cache.keys()):
+        if key == meeting_date or key.startswith(f"{meeting_date}:"):
+            _analysis_cache.pop(key, None)
 
 
 def parse_text_tips(text: str) -> Dict[str, dict]:
@@ -299,29 +306,34 @@ async def re_extract_all(meeting_date: str):
 
 
 @router.get("/{meeting_date}/analysis")
-async def get_analysis(meeting_date: str, force: bool = False):
+async def get_analysis(meeting_date: str, force: bool = False, rainy: bool = False):
     """
     Returns the aggregated analysis for a meeting. Cached for 15 min per
-    meeting_date — pass ?force=true to bypass (the "重新分析" button does).
+    (meeting_date, rainy) — pass ?force=true to bypass.
     Cache is auto-invalidated when an image is uploaded, deleted, or
     re-extracted.
+
+    rainy=true asks the LLM analyst to weight each horse's wet-track /
+    soft-going track record more heavily in its summary.
     """
     now = time.time()
-    cached = _analysis_cache.get(meeting_date)
+    cache_key = _analysis_cache_key(meeting_date, rainy)
+    cached = _analysis_cache.get(cache_key)
     if not force and cached and (now - cached[0]) < _ANALYSIS_TTL_SECONDS:
-        return {**cached[1], "cached": True, "age_seconds": int(now - cached[0])}
+        return {**cached[1], "cached": True, "age_seconds": int(now - cached[0]), "rainy": rainy}
 
     extracted = tips_storage.load_extracted(meeting_date)
     if not extracted:
         result = {"races": {}, "summaries": {}, "source_count": 0}
-        _analysis_cache[meeting_date] = (now, result)
-        return {**result, "cached": False, "age_seconds": 0}
+        _analysis_cache[cache_key] = (now, result)
+        return {**result, "cached": False, "age_seconds": 0, "rainy": rainy}
 
     aggregated = await aggregate_per_race(extracted, meeting_date)
     summaries: Dict[int, str] = {}
     if aggregated:
         gen = await asyncio.gather(
-            *[generate_summary(rn, data, meeting_date) for rn, data in aggregated.items()],
+            *[generate_summary(rn, data, meeting_date, rainy=rainy)
+              for rn, data in aggregated.items()],
             return_exceptions=True,
         )
         for (rn, _), summary in zip(aggregated.items(), gen):
@@ -332,5 +344,5 @@ async def get_analysis(meeting_date: str, force: bool = False):
         "summaries": {str(k): v for k, v in summaries.items()},
         "source_count": len(extracted),
     }
-    _analysis_cache[meeting_date] = (now, result)
-    return {**result, "cached": False, "age_seconds": 0}
+    _analysis_cache[cache_key] = (now, result)
+    return {**result, "cached": False, "age_seconds": 0, "rainy": rainy}
