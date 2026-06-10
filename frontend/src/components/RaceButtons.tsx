@@ -29,23 +29,35 @@ export default function RaceButtons({ activeRace, onSelect }: Props) {
   const [raceNos, setRaceNos] = useState<number[]>([])
   const [tracked, setTracked] = useState<Map<number, TrackedRace>>(new Map())
 
-  // Discover races from the meeting trainer-grid (auto-detected, 1..N)
+  // Discover races from the meeting trainer-grid (auto-detected, 1..N).
+  // While the backend reports status==='loading' (cache cold/expired and
+  // a fresh scrape is in flight), retry every 4 s so we don't get stuck
+  // on "Loading races…" for up to a minute.
   useEffect(() => {
     let cancelled = false
+    let timer: ReturnType<typeof setTimeout> | null = null
     const fetchMeeting = async () => {
+      let nextDelay = 60_000
       try {
         const res = await fetch(apiUrl('/api/meeting/trainer-grid'))
-        if (!res.ok) return
-        const json: TrainerGridResponse = await res.json()
-        if (!cancelled && json.summary) {
-          const nums = json.summary.races.map(r => r.race_no).sort((a, b) => a - b)
-          setRaceNos(nums)
+        if (res.ok) {
+          const json: TrainerGridResponse = await res.json()
+          if (!cancelled && json.summary) {
+            const nums = json.summary.races.map(r => r.race_no).sort((a, b) => a - b)
+            setRaceNos(nums)
+          } else if (json.status === 'loading') {
+            nextDelay = 4_000   // fast retry while the backend is still scraping
+          }
+        } else {
+          nextDelay = 8_000     // backend hiccup → modest retry
         }
-      } catch { /* ignore */ }
+      } catch {
+        nextDelay = 8_000
+      }
+      if (!cancelled) timer = setTimeout(fetchMeeting, nextDelay)
     }
     fetchMeeting()
-    const t = setInterval(fetchMeeting, 60_000)
-    return () => { cancelled = true; clearInterval(t) }
+    return () => { cancelled = true; if (timer) clearTimeout(timer) }
   }, [])
 
   // Once we know the race numbers, register every one with the backend so
